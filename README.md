@@ -1,110 +1,82 @@
-# AutoYouBanner
+# 🖼️ AutoYouBanner - YouTube横幅生成器
 
-响应式YouTube横幅生成器 - 一键创建符合所有设备标准的频道Banner
+AutoYouBanner是一个响应式Web应用程序，用于自动生成符合YouTube标准的频道横幅（Banner）。
 
-## 项目简介
+## ✨ 特色功能
 
-AutoYouBanner是一个帮助YouTube创作者快速设计频道横幅的Web应用。用户只需输入频道名称、选择风格并上传logo，即可自动生成专业美观的横幅图片。
+- 金属感极简设计界面，灵感来源于macOS应用
+- 实时预览生成的横幅，支持多设备视图切换
+- 基于Stable Diffusion生成AI背景图像
+- 符合YouTube规范的Banner尺寸(2560 x 1440 px)
+- 安全区域(1546 x 423 px)可视化指示
+- 响应式设计，适配所有设备
+- 深色模式支持
 
-## 开发环境设置
+## 🚀 快速开始
 
-### 1. 克隆项目
+### 环境要求
+
+- Node.js 16.8.0 或更高版本
+- npm 或 yarn 包管理器
+
+### 安装步骤
+
+1. 克隆仓库
 
 ```bash
-git clone https://github.com/leongopro/youbanner.git
-cd youbanner
+git clone https://github.com/your-username/autoyoubanner.git
+cd autoyoubanner
 ```
 
-### 2. 安装依赖
+2. 安装依赖
 
 ```bash
-# 前端依赖
-cd frontend
 npm install
-
-# 后端依赖
-cd ../backend
-npm install
+# 或
+yarn
 ```
 
-### 3. 环境变量
-
-复制`.env.example`文件为`.env`并编辑相关配置。
-
-### 4. 解决编码问题
-
-为避免在多平台开发中遇到编码和换行符问题，本项目采取了以下措施：
-
-#### 编辑器设置（Cursor / VS Code）
-
-1. **确保文件编码为 UTF-8**
-   - 打开 Cursor/VS Code 的任意文件
-   - 检查右下角文件编码 → 应为 UTF-8
-   - 如果不是：点击它 → 选择 Reopen with Encoding → 选 UTF-8
-
-2. **统一换行符设置**
-   - 检查右下角的 CRLF/LF 设置
-   - 确保设置为 LF (Unix风格换行符)
-   - 如果显示CRLF：点击它 → 选择 LF
-
-3. **配置工作区设置**
-   - 按 Ctrl+Shift+P (Windows/Linux) 或 Cmd+Shift+P (Mac)
-   - 输入 "Preferences: Open Settings (JSON)"
-   - 添加以下设置:
-   ```json
-   "files.encoding": "utf8",
-   "files.eol": "\n",
-   ```
-
-#### Git配置
-
-- `.gitattributes`文件已配置确保跨平台代码提交的一致性
-- 所有代码文件使用UTF-8编码保存
-
-#### 终端编码设置
-
-**Windows PowerShell:**
-```powershell
-# 使用提供的启动脚本
-./start-dev.ps1
-
-# 或手动设置
-$env:LANG="en_US.UTF-8"
-$OutputEncoding = [System.Text.Encoding]::UTF8
-```
-
-**Git Bash/Linux/macOS:**
-```bash
-# 使用提供的启动脚本
-./start-dev.sh
-
-# 或手动设置
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
-```
-
-**推荐:**
-- Windows用户建议使用Git Bash或WSL开发
-- 所有编辑器配置为使用UTF-8编码和LF换行符
-
-### 5. 启动开发服务器
+3. 启动开发服务器
 
 ```bash
-# 前端
-cd frontend
 npm run dev
-
-# 后端
-cd backend
-npm run dev
+# 或
+yarn dev
 ```
 
-## 项目规范
+4. 打开浏览器访问 [http://localhost:3000](http://localhost:3000)
 
-- 代码风格: ESLint + Prettier
-- 提交规范: Conventional Commits
-- 分支管理: Git Flow (main/develop/feature)
+## 🧰 技术栈
 
-## 许可证
+- **框架**: Next.js 14 (App Router)
+- **样式**: Tailwind CSS + CSS变量系统
+- **组件**: shadcn/ui + Radix UI原语
+- **状态管理**: Zustand
+- **表单处理**: React Hook Form + Zod验证
+- **图像处理**: fabric.js 6.0 + WebGL加速
+- **AI集成**: Stable Diffusion
+- **TypeScript**: 类型安全的代码
 
-MIT 
+## 📦 功能模块
+
+- **表单面板**: 用户输入区域，包含基本信息、风格设置和AI背景三个选项卡
+- **预览面板**: 实时预览生成的Banner，支持桌面和移动视图切换
+- **金属感UI组件**: 自定义的金属风格UI组件，提供高品质视觉体验
+
+## 📋 注意事项
+
+- 本项目使用UTF-8编码，请确保编辑器设置正确
+- 使用.gitattributes确保跨平台换行符一致性
+- 深色模式为默认设计，浅色模式未完全优化
+
+## 🤝 贡献
+
+欢迎提交Pull Request或Issue来改进这个项目。
+
+## 📄 许可证
+
+[MIT](LICENSE)
+
+---
+
+由AutoYouBanner团队创建 © 2024 

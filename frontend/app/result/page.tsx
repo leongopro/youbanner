@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -13,6 +13,16 @@ export default function ResultPage() {
   const [status, setStatus] = useState<'pending' | 'completed' | 'failed'>('pending');
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // 添加isMounted标志来防止在卸载后更新状态
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    // 组件卸载时设置标志
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!jobId) {
@@ -22,41 +32,97 @@ export default function ResultPage() {
 
     const checkStatus = async () => {
       try {
-        // 根据类型选择不同的API端点
-        const endpoint = type === 'background' 
-          ? `http://localhost:5000/api/stablediffusion/status/${jobId}`
-          : `http://localhost:5000/api/banner/status/${jobId}`;
-          
-        const response = await fetch(endpoint);
-        const data = await response.json();
+        console.log('检查状态:', jobId, type);
+        let response;
+        
+        if (type === 'background') {
+          response = await fetch(`/api/stablediffusion/status/${jobId}`);
+        } else {
+          response = await fetch(`/api/banner/${jobId}`);
+        }
 
-        if (response.ok) {
+        // 检查组件是否仍然挂载
+        if (!isMounted.current) return;
+
+        // 检查响应状态
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('状态检查失败:', response.status, errorText);
+          throw new Error(`状态检查失败: ${response.status} ${errorText}`);
+        }
+
+        // 尝试解析JSON
+        let data;
+        try {
+          data = await response.json();
+        } catch (parseError: any) {
+          console.error('JSON解析错误:', parseError);
+          throw new Error(`无法解析响应数据: ${parseError.message}`);
+        }
+
+        // 再次检查组件是否仍然挂载
+        if (!isMounted.current) return;
+
+        console.log('获取到的状态:', data);
+
+        if (data) {
           if (data.status === 'completed') {
             setStatus('completed');
-            // 处理不同类型的响应格式
-            if (type === 'background' && data.result) {
+            if (data.result) {
               setImageUrl(data.result.imageUrl);
             } else {
               setImageUrl(data.imageUrl);
             }
           } else if (data.status === 'failed') {
+            console.log('生成失败:', data.error);
             setStatus('failed');
             setError(data.error || '生成失败');
           } else {
             // 继续等待完成
-            setTimeout(checkStatus, 2000);
+            console.log(`任务仍在处理中 (${data.status})，2秒后重新检查...`);
+            const timeoutId = setTimeout(checkStatus, 2000);
+            
+            // 清理函数，如果组件卸载则清除定时器
+            return () => clearTimeout(timeoutId);
           }
         } else {
-          setStatus('failed');
-          setError(data.message || '获取状态失败');
+          throw new Error('响应数据为空');
         }
-      } catch (err) {
+      } catch (err: any) {
+        // 检查组件是否仍然挂载
+        if (!isMounted.current) return;
+        
+        console.error('获取状态错误:', err);
         setStatus('failed');
-        setError('请求失败，请稍后重试');
+        setError(`获取状态失败: ${err.message}`);
       }
     };
 
-    checkStatus();
+    // 添加超时处理，避免无限等待
+    let checkCount = 0;
+    const MAX_CHECKS = 60; // 最多检查60次，约2分钟
+
+    const checkWithTimeout = async () => {
+      checkCount++;
+      if (checkCount > MAX_CHECKS) {
+        // 检查组件是否仍然挂载
+        if (!isMounted.current) return;
+        
+        console.log(`已检查${MAX_CHECKS}次，超时设置为失败状态`);
+        setStatus('failed');
+        setError('生成超时，请稍后重试');
+        return;
+      }
+      
+      await checkStatus();
+    };
+
+    checkWithTimeout();
+    
+    // 清理函数
+    return () => {
+      isMounted.current = false;
+    };
   }, [jobId, type]);
 
   const handleDownload = () => {
@@ -73,10 +139,12 @@ export default function ResultPage() {
   };
 
   const getTitle = () => {
+    // 返回类型对应的标题
     return type === 'background' ? 'AI生成的背景图片' : 'YouTube Banner';
   };
 
   const getReturnLink = () => {
+    // 返回类型对应的页面路径
     return type === 'background' ? '/background' : '/create';
   };
 

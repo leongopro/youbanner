@@ -4,27 +4,47 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
+// 添加支持的尺寸组合
+const SUPPORTED_DIMENSIONS = [
+  { width: 1024, height: 1024, label: '1024x1024 (正方形)' },
+  { width: 1152, height: 896, label: '1152x896 (横向)' },
+  { width: 1216, height: 832, label: '1216x832 (横向)' },
+  { width: 1344, height: 768, label: '1344x768 (横向)' },
+  { width: 1536, height: 640, label: '1536x640 (横向宽幅)' },
+  { width: 640, height: 1536, label: '640x1536 (纵向)' },
+  { width: 768, height: 1344, label: '768x1344 (纵向)' },
+  { width: 832, height: 1216, label: '832x1216 (纵向)' },
+  { width: 896, height: 1152, label: '896x1152 (纵向)' }
+];
+
 export default function BackgroundGenerator() {
   const router = useRouter();
   const [formData, setFormData] = useState({
     prompt: '',
     negativePrompt: '',
-    width: 1280,
-    height: 720,
+    width: 1024,
+    height: 1024,
     steps: 30,
     guidanceScale: 7.5
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ 
-      ...prev, 
-      [name]: name === 'width' || name === 'height' || name === 'steps' || name === 'guidanceScale' 
-        ? parseFloat(value) 
-        : value 
-    }));
+    
+    // 处理尺寸选择
+    if (name === 'dimensions') {
+      const [width, height] = value.split('x').map(Number);
+      setFormData(prev => ({ ...prev, width, height }));
+    } else {
+      setFormData(prev => ({ 
+        ...prev, 
+        [name]: name === 'steps' || name === 'guidanceScale' 
+          ? parseFloat(value) 
+          : value 
+      }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -33,7 +53,7 @@ export default function BackgroundGenerator() {
     setError('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/stablediffusion/generate', {
+      const response = await fetch('/api/stablediffusion/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -77,10 +97,10 @@ export default function BackgroundGenerator() {
             onChange={handleChange}
             className="w-full px-3 py-2 border border-gray-300 rounded-md"
             rows={3}
-            placeholder="描述你想要生成的图片，例如：美丽的山脉日落风景，高清照片，4K"
+            placeholder="Describe what you want to generate, e.g.: Beautiful mountain sunset landscape, high quality photo, 4K"
             required
           />
-          <p className="text-xs text-gray-500 mt-1">详细的描述有助于生成更好的结果</p>
+          <p className="text-xs text-gray-500 mt-1">请使用英文描述，API只支持英语提示词</p>
         </div>
 
         <div className="mb-4">
@@ -94,44 +114,31 @@ export default function BackgroundGenerator() {
             onChange={handleChange}
             className="w-full px-3 py-2 border border-gray-300 rounded-md"
             rows={2}
-            placeholder="描述你不希望在图片中出现的元素，例如：模糊，低质量，变形"
+            placeholder="Words to avoid in the image, e.g.: blurry, low quality, distorted"
           />
+          <p className="text-xs text-gray-500 mt-1">请使用英文描述，API只支持英语提示词</p>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div>
-            <label htmlFor="width" className="block text-sm font-medium mb-1">
-              宽度
-            </label>
-            <input
-              type="number"
-              id="width"
-              name="width"
-              value={formData.width}
-              onChange={handleChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              min="512"
-              max="1280"
-              step="64"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="height" className="block text-sm font-medium mb-1">
-              高度
-            </label>
-            <input
-              type="number"
-              id="height"
-              name="height"
-              value={formData.height}
-              onChange={handleChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              min="512"
-              max="1280"
-              step="64"
-            />
-          </div>
+        <div className="mb-6">
+          <label htmlFor="dimensions" className="block text-sm font-medium mb-1">
+            图片尺寸
+          </label>
+          <select
+            id="dimensions"
+            name="dimensions"
+            value={`${formData.width}x${formData.height}`}
+            onChange={handleChange}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          >
+            {SUPPORTED_DIMENSIONS.map(dim => (
+              <option key={`${dim.width}x${dim.height}`} value={`${dim.width}x${dim.height}`}>
+                {dim.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            Stable Diffusion XL只支持特定的尺寸组合
+          </p>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mb-6">

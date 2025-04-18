@@ -1,9 +1,12 @@
 import type { Metadata } from 'next'
-import "../styles/globals.css"
+import "./globals.css"
 
 export const metadata: Metadata = {
   title: 'AutoYouBanner - YouTube Banner生成器',
   description: '一键生成YouTube频道Banner，支持各种风格定制',
+  icons: {
+    icon: '/favicon.ico',
+  },
 }
 
 export default function RootLayout({

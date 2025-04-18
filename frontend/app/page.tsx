@@ -1,14 +1,14 @@
 "use client";
 import { useState } from 'react';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
 import BannerForm from '@/components/BannerForm';
 import BackgroundForm from '@/components/BackgroundForm';
-
-// 动态导入结果组件
-const Result = dynamic(() => import('@/components/Result'), { ssr: false });
+import Result from '@/components/Result';
+import logger from '@/lib/logger';
 
 export default function Home() {
+  logger.info('页面加载', '首页已加载');
+
   const [activeTab, setActiveTab] = useState<'banner' | 'background'>('banner');
   const [jobId, setJobId] = useState<string | null>(null);
   const [resultType, setResultType] = useState<'banner' | 'background'>('banner');

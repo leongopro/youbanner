@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试 v2beta img2img API</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .form-container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"],
+        input[type="range"],
+        textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .file-label {
+            display: inline-block;
+            padding: 8px 12px;
+            background-color: #4CAF50;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 5px;
+        }
+        .preview-image {
+            max-width: 100%;
+            max-height: 300px;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            display: none;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #result-container {
+            margin-top: 20px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: none;
+        }
+        #result-image {
+            max-width: 100%;
+            margin-top: 10px;
+        }
+        .progress-container {
+            margin-top: 20px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: none;
+        }
+        .status-text {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .error-text {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+        .range-value {
+            display: inline-block;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>测试 v2beta img2img API</h1>
+    
+    <div class="form-container">
+        <div class="form-group">
+            <label for="prompt">提示词:</label>
+            <textarea id="prompt" rows="3" placeholder="请输入提示词..."></textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="negative-prompt">负面提示词 (可选):</label>
+            <textarea id="negative-prompt" rows="2" placeholder="请输入负面提示词..."></textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="style-strength">样式强度: <span id="strength-value" class="range-value">0.35</span></label>
+            <input type="range" id="style-strength" min="0" max="1" step="0.01" value="0.35">
+        </div>
+        
+        <div class="form-group">
+            <label for="output-format">输出格式:</label>
+            <select id="output-format">
+                <option value="webp">WebP</option>
+                <option value="png">PNG</option>
+                <option value="jpg">JPG</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="image">上传图像:</label>
+            <input type="file" id="image" accept="image/*">
+            <label for="image" class="file-label" onclick="console.log('选择图片按钮被点击');">选择图片</label>
+            <div id="file-name"></div>
+            <img id="preview" class="preview-image">
+        </div>
+        
+        <button id="submit" disabled>生成图像</button>
+    </div>
+    
+    <div class="progress-container" id="progress-container">
+        <div class="status-text" id="status-text">处理中...</div>
+        <div class="progress-info" id="progress-info"></div>
+    </div>
+    
+    <div id="result-container">
+        <h3>生成结果</h3>
+        <img id="result-image">
+    </div>
+    
+    <script>
+        // 添加全局错误处理
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error('页面错误:', message, 'at', source, lineno, colno);
+            alert('页面发生错误: ' + message);
+            return false;
+        };
+
+        // 获取DOM元素
+        const promptInput = document.getElementById('prompt');
+        const negativePromptInput = document.getElementById('negative-prompt');
+        const styleStrengthInput = document.getElementById('style-strength');
+        const styleStrengthValue = document.getElementById('strength-value');
+        const outputFormatSelect = document.getElementById('output-format');
+        const imageInput = document.getElementById('image');
+        const fileNameDiv = document.getElementById('file-name');
+        const previewImg = document.getElementById('preview');
+        const submitButton = document.getElementById('submit');
+        const progressContainer = document.getElementById('progress-container');
+        const statusText = document.getElementById('status-text');
+        const progressInfo = document.getElementById('progress-info');
+        const resultContainer = document.getElementById('result-container');
+        const resultImage = document.getElementById('result-image');
+        
+        // 更新样式强度显示
+        styleStrengthInput.addEventListener('input', () => {
+            styleStrengthValue.textContent = styleStrengthInput.value;
+        });
+        
+        // 图像预览
+        imageInput.addEventListener('change', e => {
+            console.log('图片选择变化:', e);
+            const file = e.target.files[0];
+            console.log('选择的文件:', file);
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    console.log('文件读取完成');
+                    previewImg.src = e.target.result;
+                    previewImg.style.display = 'block';
+                    fileNameDiv.textContent = file.name;
+                    validateForm();
+                };
+                reader.onerror = error => {
+                    console.error('读取文件错误:', error);
+                    alert('读取文件失败: ' + error);
+                };
+                console.log('开始读取文件...');
+                reader.readAsDataURL(file);
+            }
+        });
+        
+        // 验证表单
+        function validateForm() {
+            const isValid = promptInput.value.trim() !== '' && imageInput.files.length > 0;
+            submitButton.disabled = !isValid;
+        }
+        
+        promptInput.addEventListener('input', validateForm);
+        
+        // 提交表单
+        submitButton.addEventListener('click', async () => {
+            submitButton.disabled = true;
+            progressContainer.style.display = 'block';
+            resultContainer.style.display = 'none';
+            statusText.textContent = '上传图像并处理中...';
+            progressInfo.textContent = '';
+            progressInfo.classList.remove('error-text');
+            
+            try {
+                // 读取图像为base64
+                const file = imageInput.files[0];
+                const reader = new FileReader();
+                
+                reader.onload = async (e) => {
+                    const base64Image = e.target.result;
+                    
+                    // 准备请求数据
+                    const data = {
+                        prompt: promptInput.value.trim(),
+                        userImageUrl: base64Image,
+                        styleStrength: parseFloat(styleStrengthInput.value),
+                        outputFormat: outputFormatSelect.value
+                    };
+                    
+                    const negativePrompt = negativePromptInput.value.trim();
+                    if (negativePrompt) {
+                        data.negativePrompt = negativePrompt;
+                    }
+                    
+                    try {
+                        // 发送API请求
+                        statusText.textContent = '发送请求到服务器...';
+                        const response = await fetch('/api/stability/v2beta/img2img', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(data)
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (!response.ok) {
+                            throw new Error(result.error || '请求失败');
+                        }
+                        
+                        // 检查任务状态
+                        if (result.jobId) {
+                            statusText.textContent = '图像生成中，请稍候...';
+                            checkJobStatus(result.jobId);
+                        } else {
+                            throw new Error('未能获取任务ID');
+                        }
+                    } catch (error) {
+                        console.error('请求失败:', error);
+                        statusText.textContent = '请求失败';
+                        progressInfo.textContent = error.message;
+                        progressInfo.classList.add('error-text');
+                        submitButton.disabled = false;
+                    }
+                };
+                
+                reader.readAsDataURL(file);
+            } catch (error) {
+                console.error('处理图像失败:', error);
+                statusText.textContent = '处理失败';
+                progressInfo.textContent = error.message;
+                progressInfo.classList.add('error-text');
+                submitButton.disabled = false;
+            }
+        });
+        
+        // 检查任务状态
+        async function checkJobStatus(jobId) {
+            try {
+                console.log('检查任务状态:', jobId);
+                const response = await fetch(`/api/stability/v2beta/status/${jobId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`状态请求失败: HTTP ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log('获取到任务状态:', result);
+                
+                if (result.status === 'completed') {
+                    // 任务完成，显示结果
+                    statusText.textContent = '图像生成完成!';
+                    resultContainer.style.display = 'block';
+                    
+                    // 获取图像URL
+                    let imageUrl = '';
+                    
+                    // 检查result.result的类型
+                    if (typeof result.result === 'string') {
+                        // 直接使用字符串URL
+                        imageUrl = result.result;
+                        console.log('使用直接返回的URL字符串:', imageUrl);
+                    } else if (result.result && result.result.imageUrl) {
+                        // 使用对象中的imageUrl属性
+                        imageUrl = result.result.imageUrl;
+                        console.log('使用result.result.imageUrl:', imageUrl);
+                    } else {
+                        console.error('无法获取有效图像URL:', result);
+                        progressInfo.textContent = '无法获取有效的图像URL';
+                        progressInfo.classList.add('error-text');
+                        submitButton.disabled = false;
+                        return;
+                    }
+                    
+                    // 确保URL有效
+                    if (!imageUrl || imageUrl === 'undefined') {
+                        console.error('图像URL无效:', imageUrl);
+                        progressInfo.textContent = '生成的图像URL无效';
+                        progressInfo.classList.add('error-text');
+                        submitButton.disabled = false;
+                        return;
+                    }
+                    
+                    // 如果URL不是以/开头，添加/
+                    if (!imageUrl.startsWith('/') && !imageUrl.startsWith('http')) {
+                        imageUrl = '/' + imageUrl;
+                    }
+                    
+                    console.log('最终图像URL:', imageUrl);
+                    resultImage.src = imageUrl;
+                    resultImage.onerror = function() {
+                        console.error('图像加载失败:', imageUrl);
+                        progressInfo.textContent = '图像加载失败';
+                        progressInfo.classList.add('error-text');
+                    };
+                    resultImage.onload = function() {
+                        console.log('图像加载成功:', imageUrl);
+                    };
+                    
+                    submitButton.disabled = false;
+                } else if (result.status === 'failed') {
+                    // 任务失败
+                    statusText.textContent = '图像生成失败';
+                    progressInfo.textContent = result.error || '未知错误';
+                    progressInfo.classList.add('error-text');
+                    submitButton.disabled = false;
+                } else {
+                    // 任务仍在处理中
+                    statusText.textContent = '图像生成中，请稍候...';
+                    // 继续检查状态
+                    setTimeout(() => checkJobStatus(jobId), 1000);
+                }
+            } catch (error) {
+                console.error('检查任务状态失败:', error);
+                statusText.textContent = '检查任务状态失败';
+                progressInfo.textContent = error.message;
+                progressInfo.classList.add('error-text');
+                submitButton.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html> 

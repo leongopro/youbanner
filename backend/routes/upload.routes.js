@@ -37,6 +37,13 @@ const upload = multer({
 });
 
 /**
+ * @route POST /api/upload
+ * @desc 通用文件上传
+ * @access Public
+ */
+router.post('/', upload.single('image'), uploadController.uploadGeneral);
+
+/**
  * @route POST /api/upload/logo
  * @desc 上传Logo图片
  * @access Public
@@ -49,5 +56,12 @@ router.post('/logo', upload.single('logo'), uploadController.uploadLogo);
  * @access Public
  */
 router.post('/reference', upload.single('reference'), uploadController.uploadReference);
+
+/**
+ * @route POST /api/upload/image
+ * @desc 上传用户自定义图片
+ * @access Public
+ */
+router.post('/image', upload.single('image'), uploadController.uploadImage);
 
 module.exports = router; 

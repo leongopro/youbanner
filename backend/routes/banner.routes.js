@@ -11,10 +11,10 @@ router.post('/', bannerController.generateBanner);
 
 /**
  * @route GET /api/banners/:id
- * @desc 获取指定ID的Banner
+ * @desc 获取指定ID的Banner或检查Banner生成任务状态
  * @access Public
  */
-router.get('/:id', bannerController.getBannerById);
+router.get('/:id', bannerController.checkBannerStatus);
 
 /**
  * @route DELETE /api/banners/:id

@@ -28,7 +28,7 @@ export default function Result({ jobId, type }: ResultProps) {
         // 根据类型选择不同的API端点
         const endpoint = type === 'background' 
           ? `http://localhost:5000/api/stablediffusion/status/${jobId}`
-          : `http://localhost:5000/api/banner/status/${jobId}`;
+          : `http://localhost:5000/api/banners/${jobId}`;
           
         const response = await fetch(endpoint);
         const data = await response.json();
@@ -65,8 +65,10 @@ export default function Result({ jobId, type }: ResultProps) {
   const handleDownload = () => {
     if (!imageUrl) return;
     
+    const fullImageUrl = imageUrl.startsWith('http') ? imageUrl : `http://localhost:5000${imageUrl}`;
+    
     const link = document.createElement('a');
-    link.href = imageUrl;
+    link.href = fullImageUrl;
     link.download = type === 'background' 
       ? `ai-background-${Date.now()}.png` 
       : `youtube-banner-${Date.now()}.png`;
@@ -112,7 +114,7 @@ export default function Result({ jobId, type }: ResultProps) {
         <div>
           <div className="relative w-full aspect-[16/9] mb-6 border border-gray-200 rounded-md overflow-hidden">
             <Image 
-              src={imageUrl} 
+              src={imageUrl.startsWith('http') ? imageUrl : `http://localhost:5000${imageUrl}`} 
               alt={`生成的${getTitle()}`}
               fill 
               style={{objectFit: 'contain'}}

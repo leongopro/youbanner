@@ -46,7 +46,7 @@ export default function BannerForm({ onGenerated }: BannerFormProps) {
         formDataToSend.append('logo', file);
       }
 
-      const response = await fetch('http://localhost:5000/api/banner/generate', {
+      const response = await fetch('http://localhost:5000/api/banners', {
         method: 'POST',
         body: formDataToSend,
       });
@@ -91,7 +91,7 @@ export default function BannerForm({ onGenerated }: BannerFormProps) {
           name="channelName"
           value={formData.channelName}
           onChange={handleChange}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
           required
         />
       </div>
@@ -105,7 +105,7 @@ export default function BannerForm({ onGenerated }: BannerFormProps) {
           name="slogan"
           value={formData.slogan}
           onChange={handleChange}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
           rows={2}
         />
       </div>
@@ -135,7 +135,7 @@ export default function BannerForm({ onGenerated }: BannerFormProps) {
             name="style"
             value={formData.style}
             onChange={handleChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
           >
             <option value="gaming">游戏</option>
             <option value="vlog">Vlog</option>

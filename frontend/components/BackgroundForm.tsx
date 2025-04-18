@@ -84,7 +84,7 @@ export default function BackgroundForm({ onGenerated }: BackgroundFormProps) {
           name="prompt"
           value={formData.prompt}
           onChange={handleChange}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
           rows={3}
           placeholder="描述你想要生成的图片，例如：美丽的山脉日落风景，高清照片，4K"
           required
@@ -101,7 +101,7 @@ export default function BackgroundForm({ onGenerated }: BackgroundFormProps) {
           name="negativePrompt"
           value={formData.negativePrompt}
           onChange={handleChange}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
           rows={2}
           placeholder="描述你不希望在图片中出现的元素，例如：模糊，低质量，变形"
         />
@@ -118,7 +118,7 @@ export default function BackgroundForm({ onGenerated }: BackgroundFormProps) {
             name="width"
             value={formData.width}
             onChange={handleChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
             min="512"
             max="1280"
             step="64"
@@ -135,7 +135,7 @@ export default function BackgroundForm({ onGenerated }: BackgroundFormProps) {
             name="height"
             value={formData.height}
             onChange={handleChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
             min="512"
             max="1280"
             step="64"
@@ -154,7 +154,7 @@ export default function BackgroundForm({ onGenerated }: BackgroundFormProps) {
             name="steps"
             value={formData.steps}
             onChange={handleChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
             min="20"
             max="50"
             step="1"
@@ -172,7 +172,7 @@ export default function BackgroundForm({ onGenerated }: BackgroundFormProps) {
             name="guidanceScale"
             value={formData.guidanceScale}
             onChange={handleChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
             min="1"
             max="20"
             step="0.5"

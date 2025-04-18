@@ -76,6 +76,11 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
   
+  /* 确保输入框文本为黑色 */
+  input, textarea, select {
+    @apply text-black;
+  }
+  
   /* 金属感文本 */
   .text-metal-gradient {
     @apply bg-text-gradient text-transparent bg-clip-text font-medium;

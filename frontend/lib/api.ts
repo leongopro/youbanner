@@ -129,6 +129,21 @@ export interface AvatarCompositionParams {
 }
 
 /**
+ * 背景替换和重新打光参数
+ */
+export interface ReplaceBackgroundParams {
+  image: string; // Base64编码的图像或图像URL
+  backgroundPrompt: string; // 背景描述提示词
+  outputFormat?: string; // 输出格式，默认为png
+}
+
+// 添加移除背景参数接口
+export interface RemoveBackgroundParams {
+  image: string; // Base64编码的图像或图像URL
+  outputFormat?: string; // 输出格式，默认为png
+}
+
+/**
  * 处理API请求
  */
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
@@ -452,17 +467,138 @@ export function getFullImageUrl(imageUrl: string): string {
   
   console.log('处理图片URL:', imageUrl);
   
-  if (imageUrl.startsWith('http')) {
+  // 已经是完整的HTTP URL
+  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
     console.log('URL已经是完整的HTTP URL');
     return imageUrl;
   }
+
+  // 处理uploads路径
+  let normalizedUrl = imageUrl;
+  
+  // 删除结果URL中可能存在的双斜杠
+  if (normalizedUrl.includes('//')) {
+    normalizedUrl = normalizedUrl.replace(/\/+/g, '/');
+    console.log('修正双斜杠后的URL:', normalizedUrl);
+  }
   
   // 确保URL以/开头
-  const normalizedUrl = imageUrl.startsWith('/') ? imageUrl : '/' + imageUrl;
+  if (!normalizedUrl.startsWith('/')) {
+    normalizedUrl = '/' + normalizedUrl;
+  }
+  
   const fullUrl = `${BACKEND_URL}${normalizedUrl}`;
   
   console.log('转换后的完整URL:', fullUrl);
   return fullUrl;
+}
+
+/**
+ * 替换图像背景并重新打光
+ * @param params 参数对象
+ */
+export async function replaceBackgroundAndRelight(params: ReplaceBackgroundParams): Promise<ApiResponse<JobResponse>> {
+  logger.debug('替换背景', '开始请求替换背景和重新打光', { backgroundPrompt: params.backgroundPrompt });
+  
+  return fetchApi<JobResponse>('/api/stability/v2beta/replace-background', {
+    method: 'POST',
+    body: JSON.stringify(params)
+  });
+}
+
+/**
+ * 使用Stability AI移除图像背景
+ * @param params 参数对象
+ * @returns 任务响应
+ */
+export async function removeBackground(params: RemoveBackgroundParams): Promise<ApiResponse<any>> {
+  try {
+    // 这个API不通过后端，直接调用Stability API
+    // 需要使用API Key，首先尝试从前端API路由获取，如果失败再尝试从后端获取
+    let keyResponse: ApiResponse<{key: string}>;
+    
+    try {
+      // 尝试从Next.js API路由获取
+      const frontendResponse = await fetch('http://localhost:3000/api/stability/get-api-key');
+      const data = await frontendResponse.json();
+      keyResponse = { data };
+    } catch (frontendError) {
+      console.log('从前端获取API密钥失败，尝试从后端获取');
+      // 尝试从后端获取
+      keyResponse = await fetchApi<{key: string}>('/api/stability/get-api-key');
+    }
+    
+    if (keyResponse.error || !keyResponse.data?.key) {
+      return { error: keyResponse.error || '无法获取API密钥' };
+    }
+    
+    const apiKey = keyResponse.data.key;
+    
+    // 准备图像数据
+    let imageBlob;
+    if (params.image.startsWith('data:')) {
+      // 如果是Base64
+      const base64Data = params.image.split(',')[1];
+      imageBlob = await fetch(params.image).then(r => r.blob());
+    } else {
+      // 如果是URL
+      const imgResponse = await fetch(getFullImageUrl(params.image));
+      imageBlob = await imgResponse.blob();
+    }
+    
+    // 创建FormData
+    const formData = new FormData();
+    formData.append('image', new Blob([await imageBlob.arrayBuffer()]), 'image.png');
+    
+    if (params.outputFormat) {
+      formData.append('output_format', params.outputFormat);
+    }
+    
+    // 直接调用Stability API
+    const response = await fetch('https://api.stability.ai/v2beta/stable-image/edit/remove-background', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Accept': 'image/*'
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      let errorMsg;
+      try {
+        const errorData = await response.json();
+        errorMsg = errorData.message || errorData.error || `请求失败: ${response.status}`;
+      } catch (e) {
+        errorMsg = `请求失败: ${response.status}`;
+      }
+      return { error: errorMsg };
+    }
+    
+    // 这个API直接返回图片数据
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('image/')) {
+      // 将图片转换为Base64数据URL
+      const imageBuffer = await response.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(imageBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+      
+      const imageUrl = `data:${contentType};base64,${base64}`;
+      return { data: { imageUrl } };
+    } else {
+      // 如果不是图片，尝试解析JSON
+      try {
+        const jsonData = await response.json();
+        return { data: jsonData };
+      } catch (e) {
+        return { error: '无法解析API响应' };
+      }
+    }
+  } catch (error: any) {
+    console.error('移除背景API请求失败:', error);
+    return { error: error.message || '移除背景请求失败' };
+  }
 }
 
 export default {
@@ -476,4 +612,6 @@ export default {
   inpaintImage,
   searchReplaceImage,
   avatarComposition,
+  replaceBackgroundAndRelight,
+  removeBackground,
 }; 

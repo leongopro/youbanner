@@ -1,5 +1,8 @@
 import type { Metadata } from 'next'
 import "./globals.css"
+import ErrorBoundary from '@/components/ErrorBoundary';
+import { ErrorHandlerProvider } from '@/providers/ErrorHandlerProvider';
+import Footer from '@/components/Footer';
 
 export const metadata: Metadata = {
   title: 'AutoYouBanner - YouTube Banner生成器',
@@ -16,7 +19,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body className="min-h-screen flex flex-col">
+        <ErrorHandlerProvider>
+          <ErrorBoundary>
+            <main className="flex-grow">
+              {children}
+            </main>
+            <Footer />
+          </ErrorBoundary>
+        </ErrorHandlerProvider>
+      </body>
     </html>
   )
 } 

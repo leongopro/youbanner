@@ -29,6 +29,12 @@ const STABLE_IMAGE_EDIT_API_URL = `${API_HOST}/v2beta/stable-image/edit`;
 const REMIX_API_URL = `${API_HOST}/v2beta/stable-image/remix`;
 const STABLE_IMAGE_IMG2IMG_URL = `${API_HOST}/v2beta/stable-image/edit/inpaint`;
 
+// 添加背景移除API端点
+const REMOVE_BG_API_URL = `${API_HOST}/v2beta/stable-image/edit/remove-background`;
+
+// 添加背景替换和重新打光API端点
+const REPLACE_BG_API_URL = `${API_HOST}/v2beta/stable-image/edit/replace-background-and-relight`;
+
 // API请求配置
 const API_REQUEST_TIMEOUT = 300000; // 5分钟超时
 const MAX_RETRIES = 5;  // 最大重试次数
@@ -1488,6 +1494,350 @@ async function stableImageToImage(params) {
   }
 }
 
+/**
+ * 使用Stability AI API移除图像背景
+ * @param {Object} params - 参数对象
+ * @param {Buffer|string} params.image - 图像缓冲区或文件路径
+ * @param {string} params.outputFormat - 输出格式 (png, webp)
+ * @param {boolean} params.saveToFile - 是否保存到文件
+ * @param {string} params.outputPath - 输出文件路径 (如果saveToFile为true)
+ * @returns {Promise<Buffer|string>} - 处理后的图像缓冲区或文件路径
+ */
+async function removeBackground(params) {
+  // 验证API密钥
+  checkApiKey();
+  
+  // 提取参数
+  const { 
+    image, 
+    outputFormat = 'png', 
+    saveToFile = false, 
+    outputPath = null 
+  } = params;
+  
+  // 准备FormData
+  const formData = new FormData();
+  
+  // 处理图像输入
+  if (typeof image === 'string') {
+    // 如果是文件路径
+    logger.info('从文件加载图像进行背景移除', { filePath: image });
+    formData.append('image', fs.createReadStream(image));
+  } else if (Buffer.isBuffer(image)) {
+    // 如果是Buffer
+    logger.info('使用Buffer数据进行背景移除', { bufferSize: image.length });
+    formData.append('image', image, { filename: 'image.png' });
+  } else {
+    throw new Error('图像参数必须是文件路径或Buffer');
+  }
+  
+  // 设置输出格式
+  formData.append('output_format', outputFormat);
+  
+  // 记录API调用
+  logStabilityApiCall('removeBackground', {
+    outputFormat,
+    saveToFile,
+    imageType: typeof image === 'string' ? 'filePath' : 'buffer'
+  });
+  
+  try {
+    // 准备请求配置
+    const config = {
+      method: 'post',
+      url: REMOVE_BG_API_URL,
+      headers: {
+        'Authorization': `Bearer ${STABILITY_API_KEY}`,
+        'Accept': 'image/*',
+        ...formData.getHeaders()
+      },
+      data: formData,
+      responseType: 'arraybuffer'
+    };
+    
+    // 发送请求
+    logger.info('发送背景移除API请求');
+    const response = await sendRequestWithRetry(config, MAX_RETRIES, INITIAL_RETRY_DELAY, MAX_RETRY_DELAY);
+    
+    // 接收图像数据
+    const imageBuffer = Buffer.from(response.data);
+    
+    // 如果需要保存到文件
+    if (saveToFile) {
+      const saveFilePath = outputPath || `./uploads/bg_removed_${Date.now()}.${outputFormat}`;
+      await saveImageToFile(imageBuffer, saveFilePath);
+      logger.info('背景移除结果已保存到文件', { path: saveFilePath });
+      return saveFilePath;
+    }
+    
+    // 返回图像缓冲区
+    logger.info('背景移除成功', { bufferSize: imageBuffer.length });
+    return imageBuffer;
+  } catch (error) {
+    logger.error('背景移除API请求失败', { error: error.message });
+    throw new Error(`背景移除API请求失败: ${error.message}`);
+  }
+}
+
+/**
+ * 使用Stability AI API替换图像背景并重新打光
+ * @param {Object} params - 参数对象
+ * @param {Buffer|string} params.image - 图像缓冲区或文件路径
+ * @param {string} params.backgroundPrompt - 背景描述提示词
+ * @param {string} params.outputFormat - 输出格式 (png, webp)
+ * @param {boolean} params.saveToFile - 是否保存到文件
+ * @param {string} params.outputPath - 输出文件路径 (如果saveToFile为true)
+ * @returns {Promise<Object>} - 包含生成ID和结果的对象
+ */
+async function replaceBackgroundAndRelight(params) {
+  // 验证API密钥
+  checkApiKey();
+  
+  // 提取参数
+  const { 
+    image, 
+    backgroundPrompt,
+    outputFormat = 'png', 
+    saveToFile = false, 
+    outputPath = null 
+  } = params;
+  
+  if (!backgroundPrompt) {
+    throw new Error('必须提供背景描述提示词');
+  }
+  
+  // 准备FormData
+  const formData = new FormData();
+  
+  // 处理图像输入
+  if (typeof image === 'string') {
+    // 如果是文件路径
+    logger.info('从文件加载图像进行背景替换', { filePath: image });
+    formData.append('subject_image', fs.createReadStream(image));
+  } else if (Buffer.isBuffer(image)) {
+    // 如果是Buffer
+    logger.info('使用Buffer数据进行背景替换', { bufferSize: image.length });
+    formData.append('subject_image', image, { filename: 'image.png' });
+  } else {
+    throw new Error('图像参数必须是文件路径或Buffer');
+  }
+  
+  // 设置背景提示词
+  formData.append('background_prompt', backgroundPrompt);
+  
+  // 设置输出格式
+  formData.append('output_format', outputFormat);
+  
+  // 记录API调用
+  logStabilityApiCall('replaceBackgroundAndRelight', {
+    backgroundPrompt,
+    outputFormat,
+    saveToFile,
+    imageType: typeof image === 'string' ? 'filePath' : 'buffer'
+  });
+  
+  try {
+    // 准备请求配置
+    const config = {
+      method: 'post',
+      url: REPLACE_BG_API_URL,
+      headers: {
+        'Authorization': `Bearer ${STABILITY_API_KEY}`,
+        'Accept': 'application/json',
+        ...formData.getHeaders()
+      },
+      data: formData
+    };
+    
+    // 发送请求
+    logger.info('发送背景替换API请求');
+    const response = await sendRequestWithRetry(config, MAX_RETRIES, INITIAL_RETRY_DELAY, MAX_RETRY_DELAY);
+    
+    // 接收任务ID
+    const { id } = response.data;
+    logger.info('背景替换请求已提交', { id });
+    
+    if (!id) {
+      throw new Error('API响应中没有找到任务ID');
+    }
+    
+    // 这个API是异步的，返回任务ID
+    return {
+      id,
+      saveToFile,
+      outputPath,
+      outputFormat
+    };
+  } catch (error) {
+    logger.error('背景替换API请求失败', { error: error.message });
+    throw new Error(`背景替换API请求失败: ${error.message}`);
+  }
+}
+
+/**
+ * 检查背景替换任务状态
+ * @param {string} id - 任务ID
+ * @returns {Promise<Object>} - 任务状态和结果
+ */
+async function checkReplaceBackgroundStatus(id) {
+  // 验证API密钥
+  checkApiKey();
+  
+  if (!id) {
+    throw new Error('必须提供任务ID');
+  }
+  
+  try {
+    // 使用正确的端点顺序，添加更多可能的端点
+    const endpoints = [
+      `${API_HOST}/v2beta/generation/status/${id}`,
+      `${API_HOST}/v2beta/generation/image-to-image/result/${id}`,
+      `${API_HOST}/v2beta/stable-image/result/${id}`,
+      `${API_HOST}/v2beta/stable-image/edit/replace-background-and-relight/result/${id}`
+    ];
+    
+    let response = null;
+    let endpointUsed = null;
+    
+    // 依次尝试不同的端点
+    for (const endpoint of endpoints) {
+      try {
+        logger.info('尝试检查背景替换任务状态', { id, endpoint });
+        // 准备请求配置
+        const config = {
+          method: 'get',
+          url: endpoint,
+          headers: {
+            'Authorization': `Bearer ${STABILITY_API_KEY}`,
+            'Accept': 'application/json'
+          },
+          validateStatus: function(status) {
+            return status < 500; // 接受非服务器错误的状态码
+          }
+        };
+        
+        // 发送请求
+        const endpointResponse = await sendRequestWithRetry(config, MAX_RETRIES, INITIAL_RETRY_DELAY, MAX_RETRY_DELAY);
+        
+        // 如果请求成功，使用此响应
+        if (endpointResponse.status === 200 || endpointResponse.status === 202) {
+          response = endpointResponse;
+          endpointUsed = endpoint;
+          logger.info('成功使用端点获取状态', { endpoint, status: endpointResponse.status });
+          
+          // 如果是成功完成，立即返回
+          if (endpointResponse.status === 200) {
+            break;
+          }
+        }
+      } catch (error) {
+        logger.warn(`尝试端点 ${endpoint} 失败`, { error: error.message });
+        // 继续尝试下一个端点
+      }
+    }
+    
+    // 如果所有端点都失败
+    if (!response) {
+      throw new Error('所有API端点都返回了错误');
+    }
+    
+    logger.info('成功从端点获取状态', { endpointUsed, status: response.status });
+    
+    if (response.status === 202) {
+      // 任务仍在处理中
+      logger.info('背景替换任务仍在处理中', { id });
+      return { 
+        status: 'processing',
+        id
+      };
+    }
+    
+    if (response.status !== 200) {
+      throw new Error(`API返回错误状态码: ${response.status}`);
+    }
+    
+    // 任务完成，获取结果
+    const result = response.data;
+    logger.info('背景替换任务完成', { id, responseData: JSON.stringify(result).substring(0, 200) });
+    
+    // 检查返回的图像URL
+    if (!result.image_url && !result.artifacts?.[0]?.base64) {
+      logger.error('API响应中没有找到图像URL或base64数据', { 
+        hasImageUrl: !!result.image_url, 
+        hasArtifacts: !!result.artifacts,
+        artifactsLength: result.artifacts ? result.artifacts.length : 0
+      });
+      throw new Error('API响应中没有找到可用的图像数据');
+    }
+    
+    let imageBuffer;
+    let imageUrl;
+    
+    // 处理不同的响应格式
+    if (result.image_url) {
+      // 如果有image_url，直接使用
+      imageUrl = result.image_url;
+      // 下载生成的图像
+      const imageResponse = await axios.get(result.image_url, {
+        responseType: 'arraybuffer'
+      });
+      imageBuffer = Buffer.from(imageResponse.data);
+    } else if (result.artifacts && result.artifacts.length > 0 && result.artifacts[0].base64) {
+      // 如果有base64数据，解码
+      imageBuffer = Buffer.from(result.artifacts[0].base64, 'base64');
+      // 生成本地URL（这里需要保存文件）
+      const filename = `bg_replaced_${id}_${Date.now()}.png`;
+      const filePath = await saveImageToFile(imageBuffer, filename);
+      imageUrl = filePath;
+    }
+    
+    logger.info('已处理背景替换结果图像', { 
+      id,
+      size: imageBuffer ? `${(imageBuffer.length / 1024).toFixed(2)}KB` : 'unknown',
+      imageUrl: imageUrl || 'none'
+    });
+    
+    // 返回结果
+    return {
+      status: 'completed',
+      id,
+      imageBuffer,
+      imageUrl
+    };
+  } catch (error) {
+    logger.error('检查背景替换任务状态失败', { id, error: error.message });
+    return {
+      status: 'error',
+      id,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * 下载并保存背景替换结果图像
+ * @param {Object} task - 任务信息对象
+ * @param {Buffer} imageBuffer - 图像数据
+ * @returns {Promise<string>} - 保存的文件路径
+ */
+async function saveBgReplaceResult(task, imageBuffer) {
+  const { id, saveToFile, outputPath, outputFormat } = task;
+  
+  if (!saveToFile) {
+    return null;
+  }
+  
+  try {
+    const filename = outputPath || `bg_replaced_${id}.${outputFormat || 'png'}`;
+    const filePath = await saveImageToFile(imageBuffer, filename);
+    logger.info('背景替换结果已保存到文件', { id, path: filePath });
+    return filePath;
+  } catch (error) {
+    logger.error('保存背景替换结果失败', { id, error: error.message });
+    throw new Error(`保存背景替换结果失败: ${error.message}`);
+  }
+}
+
 module.exports = {
   generateImage,
   saveImageToFile,
@@ -1498,5 +1848,9 @@ module.exports = {
   generateTextToImage,
   generateImageToImage,
   inpaintImage,
-  stableImageToImage
+  stableImageToImage,
+  removeBackground,
+  replaceBackgroundAndRelight,
+  checkReplaceBackgroundStatus,
+  saveBgReplaceResult
 }; 

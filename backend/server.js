@@ -193,6 +193,7 @@ dirsToCreate.forEach(dir => {
 
 // 静态文件目录
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 app.use('/generated', express.static(path.join(__dirname, 'public', 'generated'), {
   maxAge: '1h',
   setHeaders: (res, path) => {
@@ -210,6 +211,43 @@ app.use('/api/stable-diffusion', stableDiffusionRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/monitor', monitorRoutes);
 app.use('/api/stability', stabilityRoutes);
+
+// 添加文件存在检查端点
+app.get('/api/check-file-exists', (req, res) => {
+  const { filePath } = req.query;
+  
+  if (!filePath) {
+    return res.status(400).json({ exists: false, error: '未提供文件路径' });
+  }
+  
+  try {
+    const normalizedPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+    const absolutePath = path.join(__dirname, normalizedPath);
+    
+    console.log(`[检查文件] 检查文件是否存在: ${absolutePath}`);
+    const exists = fs.existsSync(absolutePath);
+    
+    if (exists) {
+      const stats = fs.statSync(absolutePath);
+      return res.json({ 
+        exists,
+        isDirectory: stats.isDirectory(),
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime
+      });
+    }
+    
+    return res.json({ exists: false });
+  } catch (error) {
+    console.error(`检查文件存在性出错:`, error);
+    return res.status(500).json({ 
+      exists: false, 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
 
 // 健康检查端点
 app.get('/health', (req, res) => {

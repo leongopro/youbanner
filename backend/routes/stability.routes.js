@@ -4,6 +4,30 @@ const stabilityController = require('../controllers/stablediffusion.controller')
 const { logger } = require('../services/logger.service');
 
 /**
+ * 获取Stability API密钥
+ * @route GET /api/stability/get-api-key
+ * @description 安全地获取Stability API密钥
+ * @access Public
+ */
+router.get('/get-api-key', (req, res) => {
+  try {
+    // 从环境变量中获取API密钥
+    const apiKey = process.env.STABILITY_API_KEY || process.env.STABLE_DIFFUSION_API_KEY;
+    
+    if (!apiKey) {
+      logger.error('未找到Stability API密钥');
+      return res.status(500).json({ error: '未找到API密钥' });
+    }
+    
+    // 返回API密钥
+    return res.json({ key: apiKey });
+  } catch (error) {
+    logger.error('获取API密钥时出错:', error);
+    return res.status(500).json({ error: '服务器错误，无法获取API密钥' });
+  }
+});
+
+/**
  * 使用v2beta API进行img2img处理
  * @route POST /api/stability/v2beta/img2img
  * @description 使用v2beta API将提供的图像转换为新图像
@@ -18,6 +42,14 @@ router.post('/v2beta/img2img', stabilityController.generateStableImg2Img);
  * @access Public
  */
 router.get('/v2beta/status/:jobId', stabilityController.checkGenerationStatus);
+
+/**
+ * 替换图像背景并重新打光
+ * @route POST /api/stability/v2beta/replace-background
+ * @description 替换图像背景并重新打光
+ * @access Public
+ */
+router.post('/v2beta/replace-background', stabilityController.replaceBackgroundAndRelight);
 
 /**
  * 测试API错误记录

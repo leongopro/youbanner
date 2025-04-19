@@ -3,624 +3,689 @@
 import { useState, useRef, useEffect } from 'react';
 import { 
   uploadImage, 
-  generateImg2Img, 
-  checkBackgroundStatus, 
-  getFullImageUrl, 
-  avatarComposition, 
-  generateBackgroundImage, 
-  type BackgroundStatusResponse 
+  removeBackground,
+  type RemoveBackgroundParams,
+  generateBackgroundImage,
+  checkBackgroundStatus,
+  type BackgroundStatusResponse
 } from '@/lib/api';
 
 // 补充BackgroundStatusResponse类型定义
 type EnhancedBackgroundStatusResponse = BackgroundStatusResponse & {
   imageUrl?: string; // 可能存在的额外属性
+  message?: string;  // 处理阶段消息
+  progress?: string; // 进度信息
 };
 
-export default function DebugPage() {
-  // 头像合成相关状态
-  const [avatarImageUrl, setAvatarImageUrl] = useState<string | null>(null);
-  const [backgroundImageUrl, setBackgroundImageUrl] = useState<string | null>(null);
-  const [avatarCompositeResult, setAvatarCompositeResult] = useState<string | null>(null);
-  const [avatarPrompt, setAvatarPrompt] = useState<string>('完美融合的头像，自然的光影效果，高质量细节');
-  const [preserveDetail, setPreserveDetail] = useState<number>(65); // 保留细节百分比：0-100
-  const [avatarPosition, setAvatarPosition] = useState<string>('center'); // 头像位置：center, top, bottom, left, right, top-left, top-right, bottom-left, bottom-right
-  const [isAvatarProcessing, setIsAvatarProcessing] = useState<boolean>(false);
-  const [avatarJobId, setAvatarJobId] = useState<string | null>(null);
-  const [avatarStatus, setAvatarStatus] = useState<string>('');
-  const avatarInputRef = useRef<HTMLInputElement>(null);
-  const backgroundInputRef = useRef<HTMLInputElement>(null);
+// 本地定义上传响应类型
+interface UploadResponseData {
+  success?: boolean;
+  fileUrl?: string;
+  imageUrl?: string; // 有些API返回imageUrl而不是fileUrl
+}
+
+// 在组件顶部添加一些自定义CSS（如果没有全局样式）
+const customStyles = `
+  .bg-checkered {
+    background-image: 
+      linear-gradient(45deg, #f0f0f0 25%, transparent 25%),
+      linear-gradient(-45deg, #f0f0f0 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #f0f0f0 75%),
+      linear-gradient(-45deg, transparent 75%, #f0f0f0 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  }
   
-  // 添加背景生成相关状态
-  const [backgroundPrompt, setBackgroundPrompt] = useState<string>('');
-  const [isGeneratingBackground, setIsGeneratingBackground] = useState<boolean>(false);
-  const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
-  const [backgroundStatus, setBackgroundStatus] = useState<string>('');
-  const [backgroundMode, setBackgroundMode] = useState<'upload' | 'generate'>('upload');
+  /* 自定义滚动条样式 */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 10px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #555;
+  }
+`;
 
-  // 添加抠图相关状态
-  const [shouldRemoveBackground, setShouldRemoveBackground] = useState<boolean>(false);
-  const [enhancedRemoveBackground, setEnhancedRemoveBackground] = useState<boolean>(false);
-  const [removeBackgroundThreshold, setRemoveBackgroundThreshold] = useState<number>(10);
-  const [removeBackgroundTolerance, setRemoveBackgroundTolerance] = useState<number>(30);
+export default function DebugPage() {
+  // 移除背景相关状态
+  const [removeBgImage, setRemoveBgImage] = useState<string | null>(null);
+  const [removeBgResult, setRemoveBgResult] = useState<string | null>(null);
+  const [isRemovingBg, setIsRemovingBg] = useState<boolean>(false);
+  const [removeBgStatus, setRemoveBgStatus] = useState<string>('');
+  const removeBgInputRef = useRef<HTMLInputElement>(null);
+  const [outputFormat, setOutputFormat] = useState<string>('png');
 
-  // 添加头像缩放相关状态
-  const [avatarScale, setAvatarScale] = useState<number>(100); // 头像尺寸比例：10% - 100%
-  const [cropShape, setCropShape] = useState<string>('circle'); // 裁剪形状：circle, square, rectangle, none
-
-  // 监控头像合成处理状态
+  // AI背景生成相关状态
+  const [aiBackgroundPrompt, setAiBackgroundPrompt] = useState<string>('');
+  const [aiGeneratedBackground, setAiGeneratedBackground] = useState<string | null>(null);
+  const [isGeneratingAiBackground, setIsGeneratingAiBackground] = useState<boolean>(false);
+  const [aiBackgroundStatus, setAiBackgroundStatus] = useState<string>('');
+  const [aiBackgroundJobId, setAiBackgroundJobId] = useState<string | null>(null);
+  const [compositeResult, setCompositeResult] = useState<string | null>(null);
+  
+  // 添加是否移除背景的切换状态
+  const [shouldRemoveBackground, setShouldRemoveBackground] = useState<boolean>(true);
+  
+  // 添加位置和大小调整相关状态
+  const [logoPosition, setLogoPosition] = useState({ x: 50, y: 50 }); // 位置（百分比）
+  const [logoSize, setLogoSize] = useState({ width: 200, height: 200 }); // 大小（像素）
+  const [isDragging, setIsDragging] = useState(false);
+  const [originalSize, setOriginalSize] = useState({ width: 200, height: 200 }); // 原始尺寸
+  const [logoScale, setLogoScale] = useState(100); // 缩放比例（百分比）
+  
+  // 监控AI背景生成状态
   useEffect(() => {
-    if (!avatarJobId || !isAvatarProcessing) return;
+    if (!aiBackgroundJobId || !isGeneratingAiBackground) return;
     
     const checkInterval = setInterval(async () => {
       try {
-        console.log('检查任务状态:', avatarJobId);
-        const response = await checkBackgroundStatus(avatarJobId);
-        console.log('状态检查响应:', response);
+        const response = await checkBackgroundStatus(aiBackgroundJobId);
         
         if (response.error) {
-          setAvatarStatus(`检查状态错误: ${response.error}`);
-          setIsAvatarProcessing(false);
+          setAiBackgroundStatus(`检查状态错误: ${response.error}`);
+          setIsGeneratingAiBackground(false);
           clearInterval(checkInterval);
           return;
         }
         
         // 检查是否完成
         if (response.data?.status === 'completed') {
-          console.log('任务已完成，结果:', response.data);
-          
-          // 处理不同的结果格式
           let resultUrl = null;
           
           if (response.data.result?.imageUrl) {
-            // 对象格式: { imageUrl: string }
             resultUrl = response.data.result.imageUrl;
-            console.log('使用结果对象中的imageUrl:', resultUrl);
           } else if (typeof response.data.result === 'string') {
-            // 字符串格式: 直接是URL
             resultUrl = response.data.result;
-            console.log('使用字符串格式的结果:', resultUrl);
           } else if (response.data.hasOwnProperty('imageUrl')) {
-            // 备选格式: 直接在顶层有imageUrl (可能不在类型定义中)
             resultUrl = (response.data as any).imageUrl;
-            console.log('使用顶层imageUrl:', resultUrl);
           }
           
           if (resultUrl) {
-            setAvatarCompositeResult(resultUrl);
-            setAvatarStatus('处理完成');
-            setIsAvatarProcessing(false);
-            clearInterval(checkInterval);
+            setAiGeneratedBackground(resultUrl);
+            setAiBackgroundStatus('背景生成完成');
           } else {
-            console.error('找不到有效的图像URL:', response.data);
-            setAvatarStatus('处理完成但找不到图像URL');
-            setIsAvatarProcessing(false);
-            clearInterval(checkInterval);
+            setAiBackgroundStatus('背景生成完成但找不到图像URL');
           }
+          
+          setIsGeneratingAiBackground(false);
+          clearInterval(checkInterval);
         } else if (response.data?.status === 'failed') {
-          setAvatarStatus(`处理失败: ${response.data.error || '未知错误'}`);
-          setIsAvatarProcessing(false);
+          setAiBackgroundStatus(`处理失败: ${response.data.error || '未知错误'}`);
+          setIsGeneratingAiBackground(false);
           clearInterval(checkInterval);
         } else {
-          setAvatarStatus(`处理中... (${response.data?.status || '等待'})`);
+          // 更新处理状态
+          const enhancedData = response.data as EnhancedBackgroundStatusResponse;
+          let statusMessage = enhancedData?.message || enhancedData?.status || '等待中';
+          setAiBackgroundStatus(statusMessage);
         }
       } catch (error) {
-        console.error('检查状态错误:', error);
-        setAvatarStatus('检查状态时出错');
+        console.error('检查背景生成状态时出错:', error);
+        setAiBackgroundStatus('检查状态时出错');
       }
-    }, 2000); // 每2秒检查一次
+    }, 2000);
     
     return () => clearInterval(checkInterval);
-  }, [avatarJobId, isAvatarProcessing]);
-
-  // 监控背景生成状态
-  useEffect(() => {
-    if (!backgroundJobId || !isGeneratingBackground) return;
+  }, [aiBackgroundJobId, isGeneratingAiBackground]);
+  
+  // 上传图片处理函数
+  const handleRemoveBgUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!event.target.files || !event.target.files[0]) return;
     
-    const checkInterval = setInterval(async () => {
-      try {
-        console.log('检查背景生成状态:', backgroundJobId);
-        const response = await checkBackgroundStatus(backgroundJobId);
-        console.log('背景生成状态:', response);
-        
-        if (response.error) {
-          setBackgroundStatus(`检查状态错误: ${response.error}`);
-          setIsGeneratingBackground(false);
-          clearInterval(checkInterval);
+    try {
+      const file = event.target.files[0];
+      
+      // 上传图片
+      const uploadResponse = await uploadImage(file);
+      
+      if (uploadResponse.error) {
+        alert(`上传图片错误: ${uploadResponse.error}`);
           return;
         }
         
-        if (response.data?.status === 'completed') {
-          console.log('背景生成完成，结果:', response.data);
-          
-          // 处理不同的结果格式
-          let resultUrl = null;
-          
-          if (response.data.result?.imageUrl) {
-            resultUrl = response.data.result.imageUrl;
-            console.log('使用结果对象中的imageUrl:', resultUrl);
-          } else if (typeof response.data.result === 'string') {
-            resultUrl = response.data.result;
-            console.log('使用字符串格式的结果:', resultUrl);
-          } else if ((response.data as EnhancedBackgroundStatusResponse).imageUrl) {
-            resultUrl = (response.data as EnhancedBackgroundStatusResponse).imageUrl;
-            console.log('使用顶层imageUrl:', resultUrl);
-          }
-          
-          if (resultUrl) {
-            setBackgroundImageUrl(resultUrl);
-            setBackgroundStatus('背景生成完成');
-            setIsGeneratingBackground(false);
-            clearInterval(checkInterval);
+      // 处理响应中的图像URL
+      if (uploadResponse.data) {
+        const data = uploadResponse.data as UploadResponseData;
+        if (data.imageUrl) {
+          setRemoveBgImage(data.imageUrl);
+        } else if (data.fileUrl) {
+          setRemoveBgImage(data.fileUrl);
           } else {
-            console.error('找不到有效的背景图像URL:', response.data);
-            setBackgroundStatus('背景生成完成但找不到图像URL');
-            setIsGeneratingBackground(false);
-            clearInterval(checkInterval);
+          console.error('上传响应没有包含imageUrl或fileUrl:', uploadResponse);
+          alert('上传成功但没有返回图像URL');
           }
-        } else if (response.data?.status === 'failed') {
-          setBackgroundStatus(`生成失败: ${response.data.error || '未知错误'}`);
-          setIsGeneratingBackground(false);
-          clearInterval(checkInterval);
         } else {
-          setBackgroundStatus(`生成中... (${response.data?.status || '等待'})`);
+        alert('上传响应没有数据');
         }
       } catch (error) {
-        console.error('检查背景状态错误:', error);
-        setBackgroundStatus('检查状态时出错');
-      }
-    }, 2000); // 每2秒检查一次
-    
-    return () => clearInterval(checkInterval);
-  }, [backgroundJobId, isGeneratingBackground]);
-
-  // 处理头像上传
-  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    
-    setAvatarImageUrl(null);
-    setAvatarCompositeResult(null);
-    setAvatarStatus('上传头像中...');
-    
-    try {
-      console.log('开始上传头像图片:', file.name, '大小:', Math.round(file.size / 1024), 'KB');
-      console.log('上传到URL:', `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/api/upload`);
-      
-      const response = await uploadImage(file);
-      
-      console.log('上传响应:', response);
-      
-      if (response.error) {
-        console.error('上传错误详情:', response.error);
-        setAvatarStatus(`上传失败: ${response.error}`);
-        return;
-      }
-      
-      if (!response.data?.fileUrl) {
-        console.error('上传成功但没有返回图片URL');
-        setAvatarStatus('上传成功但没有返回图片URL');
-        return;
-      }
-      
-      console.log('上传成功, 图片URL:', response.data.fileUrl);
-      setAvatarImageUrl(response.data.fileUrl);
-      setAvatarStatus('头像上传成功');
-    } catch (error: any) {
-      console.error('上传失败详情:', error);
-      setAvatarStatus(`上传失败: ${error.message || '未知错误'}`);
-    }
-  };
-
-  // 处理背景图片上传
-  const handleBackgroundUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    
-    setBackgroundImageUrl(null);
-    setAvatarStatus('上传背景图片中...');
-    
-    try {
-      const response = await uploadImage(file);
-      
-      if (response.error) {
-        setAvatarStatus(`上传失败: ${response.error}`);
-        return;
-      }
-      
-      if (!response.data?.fileUrl) {
-        setAvatarStatus('上传成功但没有返回图片URL');
-        return;
-      }
-      
-      setBackgroundImageUrl(response.data.fileUrl);
-      setAvatarStatus('背景图片上传成功');
-    } catch (error: any) {
-      console.error('上传失败:', error);
-      setAvatarStatus(`上传失败: ${error.message || '未知错误'}`);
-    }
-  };
-
-  // 添加背景生成函数
-  const generateBackground = async () => {
-    if (!backgroundPrompt) {
-      setBackgroundStatus('请输入背景提示词');
-      return;
-    }
-    
-    setBackgroundImageUrl(null);
-    setIsGeneratingBackground(true);
-    setBackgroundStatus('正在生成背景...');
-    
-    try {
-      // 调用生成背景API
-      const response = await generateBackgroundImage({
-        prompt: backgroundPrompt,
-        width: 1024,
-        height: 1024
-      });
-      
-      if (response.error) {
-        setBackgroundStatus(`生成请求失败: ${response.error}`);
-        setIsGeneratingBackground(false);
-        return;
-      }
-      
-      if (!response.data?.jobId) {
-        setBackgroundStatus('未返回有效的任务ID');
-        setIsGeneratingBackground(false);
-        return;
-      }
-      
-      setBackgroundJobId(response.data.jobId);
-      setBackgroundStatus(`背景生成开始，任务ID: ${response.data.jobId}`);
-    } catch (error: any) {
-      console.error('生成请求失败:', error);
-      setBackgroundStatus(`生成请求错误: ${error.message || '未知错误'}`);
-      setIsGeneratingBackground(false);
-    }
-  };
-
-  // 开始头像合成处理
-  const startAvatarComposite = async () => {
-    if (!avatarImageUrl) {
-      setAvatarStatus('请先上传头像');
-      return;
-    }
-    
-    if (!backgroundImageUrl) {
-      setAvatarStatus('请上传或生成背景图片');
-      return;
-    }
-    
-    setAvatarCompositeResult(null);
-    setIsAvatarProcessing(true);
-    setAvatarStatus('开始处理头像合成...');
-    
-    try {
-      // 将保留细节百分比转换为imageStrength值
-      // preserveDetail: 0(不保留) -> 100(完全保留)
-      // imageStrength: 0.8(几乎不保留) -> 0(完全保留)
-      const imageStrength = 0.8 - (preserveDetail / 100) * 0.8;
-
-      // 使用专门的头像合成API
-      const response = await avatarComposition({
-        prompt: avatarPrompt,
-        avatarUrl: avatarImageUrl,
-        backgroundUrl: backgroundImageUrl,
-        imageStrength: imageStrength, // 转换后的值
-        steps: 40, // 增加步数以获得更好的质量
-        guidanceScale: 7.5,
-        position: avatarPosition, // 添加头像位置参数
-        scale: avatarScale / 100, // 添加头像缩放参数
-        cropShape: cropShape, // 添加裁剪形状参数
-        removeBackground: shouldRemoveBackground, // 是否移除背景
-        enhancedRemoveBackground: shouldRemoveBackground && enhancedRemoveBackground, // 是否使用增强抠图
-        threshold: removeBackgroundThreshold, // 抠图阈值
-        tolerance: removeBackgroundTolerance // 颜色容差
-      });
-      
-      if (response.error) {
-        setAvatarStatus(`处理请求失败: ${response.error}`);
-        setIsAvatarProcessing(false);
-        return;
-      }
-      
-      if (!response.data?.jobId) {
-        setAvatarStatus('未返回有效的任务ID');
-        setIsAvatarProcessing(false);
-        return;
-      }
-      
-      setAvatarJobId(response.data.jobId);
-      setAvatarStatus(`处理开始，任务ID: ${response.data.jobId}`);
-    } catch (error: any) {
-      console.error('处理请求失败:', error);
-      setAvatarStatus(`处理请求错误: ${error.message || '未知错误'}`);
-      setIsAvatarProcessing(false);
+      console.error('上传图片时出错:', error);
+      alert('上传图片时发生错误，请查看控制台了解详情');
     }
   };
   
-  return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6">头像合成调试页面</h1>
+  // 移除背景处理函数
+  const startRemoveBackground = async () => {
+    if (!removeBgImage) return;
+    
+    try {
+      setIsRemovingBg(true);
+      setRemoveBgStatus('正在移除背景...');
       
-      {/* 头像合成测试部分 */}
-      <div className="mb-8 p-6 bg-green-50 rounded-lg shadow">
-        <h2 className="text-xl font-semibold mb-4">头像合成测试</h2>
-        
-        <div className="grid md:grid-cols-2 gap-6">
-          <div>
-            <h3 className="font-medium mb-2">第1步: 上传头像</h3>
-            <input
-              type="file"
-              ref={avatarInputRef}
-              onChange={handleAvatarUpload}
-              className="hidden"
-              accept="image/*"
-            />
+      // 调用移除背景API
+      const params: RemoveBackgroundParams = {
+        image: removeBgImage,
+        outputFormat
+      };
+      
+      const response = await removeBackground(params);
+      
+      if (response.error) {
+        setRemoveBgStatus(`移除背景错误: ${response.error}`);
+        setIsRemovingBg(false);
+        return;
+      }
+      
+      if (response.data && response.data.imageUrl) {
+        setRemoveBgResult(response.data.imageUrl);
+        setRemoveBgStatus('背景移除完成');
+      } else {
+        console.error('移除背景响应没有包含imageUrl:', response);
+        setRemoveBgStatus('移除背景完成但没有返回图像URL');
+      }
+    } catch (error) {
+      console.error('移除背景时出错:', error);
+      setRemoveBgStatus('移除背景时发生错误');
+    } finally {
+      setIsRemovingBg(false);
+    }
+  };
+  
+  // 生成AI背景函数
+  const generateAiBackground = async () => {
+    if (!aiBackgroundPrompt) return;
+    
+    try {
+      setIsGeneratingAiBackground(true);
+      setAiBackgroundStatus('开始生成背景...');
+      setAiGeneratedBackground(null);
+      
+      // 调用生成背景API
+      const response = await generateBackgroundImage({
+        prompt: aiBackgroundPrompt
+      });
+      
+      if (response.error) {
+        setAiBackgroundStatus(`生成背景错误: ${response.error}`);
+        setIsGeneratingAiBackground(false);
+        return;
+      }
+      
+      // 处理响应中的任务ID
+      if (response.data && (response.data.jobId || response.data.id)) {
+        setAiBackgroundJobId(response.data.jobId || response.data.id || '');
+        setAiBackgroundStatus('正在生成背景...');
+    } else {
+        console.error('生成背景响应没有包含jobId:', response);
+        setAiBackgroundStatus('生成背景响应格式错误');
+        setIsGeneratingAiBackground(false);
+      }
+    } catch (error) {
+      console.error('生成背景时出错:', error);
+      setAiBackgroundStatus('生成背景时发生错误');
+      setIsGeneratingAiBackground(false);
+    }
+  };
+  
+  // 合成图像函数 - 将移除背景的图像与AI背景合成
+  const compositeImage = () => {
+    // 检查是否有必要的图像
+    const foregroundImage = shouldRemoveBackground ? removeBgResult : removeBgImage;
+    
+    if (!foregroundImage || !aiGeneratedBackground) {
+      alert('需要同时有前景图片和AI生成背景才能合成');
+        return;
+      }
+    
+    try {
+      setAiBackgroundStatus('正在创建合成预览...');
+      
+      // 创建HTML预览
+      const compositeHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>合成图像</title>
+          <style>
+            body, html {
+              margin: 0;
+              padding: 0;
+              width: 100%;
+              height: 100%;
+              overflow: hidden;
+            }
+            .container {
+              position: relative;
+              width: 100%;
+              height: 100%;
+            }
+            .background {
+              position: absolute;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              object-fit: cover;
+              z-index: 1;
+            }
+            .foreground {
+              position: absolute;
+              top: ${logoPosition.y}%;
+              left: ${logoPosition.x}%;
+              transform: translate(-50%, -50%);
+              width: ${logoSize.width}px;
+              height: auto;
+              z-index: 2;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <img class="background" src="${getFullImageUrl(aiGeneratedBackground)}" alt="背景" />
+            <img class="foreground" src="${getFullImageUrl(foregroundImage)}" alt="前景" />
+          </div>
+        </body>
+        </html>
+      `;
+      
+      // 创建Blob并生成URL
+      const blob = new Blob([compositeHtml], { type: 'text/html' });
+      const compositeUrl = URL.createObjectURL(blob);
+      
+      setCompositeResult(compositeUrl);
+      setAiBackgroundStatus('已创建合成预览');
+    } catch (error) {
+      console.error('合成图像错误:', error);
+      setAiBackgroundStatus('合成图像时出错');
+    }
+  };
+  
+  // 辅助函数：获取完整URL
+  const getFullImageUrl = (relativeUrl: string | null): string => {
+    if (!relativeUrl) return '';
+    if (relativeUrl.startsWith('http')) return relativeUrl;
+    
+    return `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000'}${relativeUrl}`;
+  };
+
+  // 处理图像加载，获取原始尺寸
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    setOriginalSize({
+      width: img.naturalWidth,
+      height: img.naturalHeight
+    });
+    // 初始化大小为原始尺寸的50%
+    const newWidth = img.naturalWidth * 0.5;
+    const newHeight = img.naturalHeight * 0.5;
+    setLogoSize({ width: newWidth, height: newHeight });
+    setLogoScale(50);
+  };
+  
+  // 拖动处理函数
+  const handleDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    setIsDragging(true);
+  };
+  
+  const handleDragMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDragging) return;
+    
+    // 获取容器元素
+    const container = e.currentTarget;
+    const rect = container.getBoundingClientRect();
+    
+    // 计算鼠标位置相对于容器的百分比
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    // 限制在容器内
+    const boundedX = Math.min(Math.max(x, 0), 100);
+    const boundedY = Math.min(Math.max(y, 0), 100);
+    
+    setLogoPosition({ x: boundedX, y: boundedY });
+  };
+  
+  const handleDragEnd = () => {
+    setIsDragging(false);
+  };
+  
+  // 缩放处理函数
+  const handleScaleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const scale = parseInt(e.target.value);
+    setLogoScale(scale);
+    
+    // 根据缩放比例更新大小
+    if (originalSize.width > 0 && originalSize.height > 0) {
+      const newWidth = (originalSize.width * scale) / 100;
+      const newHeight = (originalSize.height * scale) / 100;
+      setLogoSize({ width: newWidth, height: newHeight });
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
+      {/* 添加自定义样式 */}
+      <style jsx global>{customStyles}</style>
+      
+      <h1 className="text-3xl font-bold mb-6">背景处理调试页面</h1>
+      
+      <div className="flex flex-col md:flex-row gap-6">
+        {/* 左侧控制区域 - 1/4宽度 */}
+        <div className="w-full md:w-1/4 flex flex-col gap-6">
+          {/* 第一部分：AI背景生成 */}
+          <div className="p-4 bg-white rounded-lg shadow">
+            <h2 className="text-lg font-semibold mb-2">第1步：AI背景生成</h2>
+            
+            <div className="flex flex-col space-y-3">
+              <div className="flex flex-col space-y-2">
+                <label className="text-xs text-gray-600">输入背景描述（如：星空、海滩、森林等）：</label>
+                <textarea
+                  value={aiBackgroundPrompt}
+                  onChange={(e) => setAiBackgroundPrompt(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  placeholder="输入详细的背景描述，越具体效果越好"
+                  rows={3}
+                ></textarea>
+              </div>
+              
             <button
-              onClick={() => avatarInputRef.current?.click()}
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 mb-4"
+                className="px-4 py-2 bg-purple-500 text-white text-sm rounded hover:bg-purple-600 whitespace-nowrap"
+                onClick={generateAiBackground}
+                disabled={!aiBackgroundPrompt || isGeneratingAiBackground}
             >
-              选择头像图片
+                生成背景
             </button>
             
-            {avatarImageUrl && (
-              <div className="mt-2">
-                <p className="text-sm text-green-600 mb-2">头像上传成功</p>
-                <div className="relative w-full aspect-square border border-gray-200 rounded-md overflow-hidden bg-gray-100">
-                  <img 
-                    src={getFullImageUrl(avatarImageUrl)} 
-                    alt="头像"
-                    className="w-full h-full object-contain"
-                  />
+              {isGeneratingAiBackground && (
+                <p className="text-purple-500 text-xs animate-pulse">{aiBackgroundStatus || '生成中...'}</p>
+              )}
                 </div>
               </div>
-            )}
+          
+          {/* 第二部分：移除背景 */}
+          <div className="p-4 bg-white rounded-lg shadow">
+            <h2 className="text-lg font-semibold mb-2">第2步：上传LOGO或头像</h2>
             
-            <h3 className="font-medium mb-2 mt-4">第2步: 上传背景图片（可选）</h3>
+            <div className="flex flex-col space-y-3">
             <input
               type="file"
-              ref={backgroundInputRef}
-              onChange={handleBackgroundUpload}
+                ref={removeBgInputRef}
+                onChange={handleRemoveBgUpload}
               className="hidden"
               accept="image/*"
             />
-            <button
-              onClick={() => backgroundInputRef.current?.click()}
-              className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 mb-4"
-            >
-              选择背景图片
-            </button>
-            
-            <div className="mt-4">
-              <h3 className="font-medium mb-2">或者通过提示词生成背景</h3>
-              <div className="flex space-x-2">
-                <input
-                  type="text"
-                  value={backgroundPrompt}
-                  onChange={(e) => setBackgroundPrompt(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
-                  placeholder="输入背景描述，例如：星空、海滩、森林等"
-                  disabled={isGeneratingBackground}
-                />
+              
+              <div className="flex flex-col space-y-2">
+                <div className="flex items-center space-x-2">
                 <button
-                  onClick={generateBackground}
-                  disabled={!backgroundPrompt || isGeneratingBackground}
-                  className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                    className="px-4 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
+                    onClick={() => removeBgInputRef.current?.click()}
                 >
-                  生成背景
+                    选择图片
                 </button>
               </div>
-              {isGeneratingBackground && (
-                <p className="text-sm text-blue-600 mt-2 animate-pulse">{backgroundStatus}</p>
-              )}
             </div>
             
-            {backgroundImageUrl && (
+              {/* 添加背景移除切换选项 */}
+              {removeBgImage && (
               <div className="mt-2">
-                <p className="text-sm text-green-600 mb-2">
-                  {backgroundMode === 'upload' ? '背景图片上传成功' : '背景图片生成成功'}
-                </p>
-                <div className="relative w-full aspect-video border border-gray-200 rounded-md overflow-hidden bg-gray-100">
-                  <img 
-                    src={getFullImageUrl(backgroundImageUrl)} 
-                    alt="背景图片"
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-          
-          <div>
-            <h3 className="font-medium mb-2">第3步: 设置合成参数</h3>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1">合成提示词:</label>
-              <textarea
-                value={avatarPrompt}
-                onChange={(e) => setAvatarPrompt(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
-                placeholder="描述你想要的合成效果"
-                rows={2}
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                提示词用于指导AI如何处理头像与背景的融合效果。例如："自然融合的头像，柔和的光影，完美的边缘过渡"
-              </p>
-            </div>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1">
-                修改程度: {preserveDetail}%
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={preserveDetail}
-                onChange={(e) => setPreserveDetail(parseInt(e.target.value))}
-                className="w-full"
-              />
-              <p className="text-xs text-gray-500">
-                值越高，修改原始头像的细节越多；值越低，AI的创造性处理越低
-              </p>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1">
-                头像位置:
-              </label>
-              <select
-                value={avatarPosition}
-                onChange={(e) => setAvatarPosition(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
-              >
-                <option value="center">居中</option>
-                <option value="top">顶部居中</option>
-                <option value="bottom">底部居中</option>
-                <option value="left">左侧居中</option>
-                <option value="right">右侧居中</option>
-                <option value="top-left">左上角</option>
-                <option value="top-right">右上角</option>
-                <option value="bottom-left">左下角</option>
-                <option value="bottom-right">右下角</option>
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                选择头像在背景中的位置
-              </p>
-            </div>
-            
-            <div className="mb-4">
-              <label className="flex items-center">
+                  <label className="flex items-center space-x-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={shouldRemoveBackground}
                   onChange={(e) => setShouldRemoveBackground(e.target.checked)}
-                  className="mr-2"
+                      className="form-checkbox h-4 w-4 text-blue-600"
                 />
-                <span className="text-sm font-medium">移除头像背景</span>
+                    <span className="text-xs text-gray-700">移除背景</span>
               </label>
-              <p className="text-xs text-gray-500 mt-1">
-                尝试自动移除头像的背景（适用于简单背景）
-              </p>
-            </div>
             
             {shouldRemoveBackground && (
-              <>
-                <div className="mb-4 ml-5">
-                  <label className="flex items-center">
-                    <input
-                      type="checkbox"
-                      checked={enhancedRemoveBackground}
-                      onChange={(e) => setEnhancedRemoveBackground(e.target.checked)}
-                      className="mr-2"
-                    />
-                    <span className="text-sm font-medium">增强模式</span>
-                  </label>
-                  <p className="text-xs text-gray-500 mt-1">
-                    对复杂背景使用更高级的抠图算法
-                  </p>
-                </div>
-                
-                <div className="mb-4 ml-5">
-                  <label className="block text-sm font-medium mb-1">
-                    {enhancedRemoveBackground ? '颜色容差' : '边缘阈值'}: {enhancedRemoveBackground ? removeBackgroundTolerance : removeBackgroundThreshold}
-                  </label>
-                  <input
-                    type="range"
-                    min={enhancedRemoveBackground ? 5 : 1}
-                    max={enhancedRemoveBackground ? 50 : 20}
-                    step={1}
-                    value={enhancedRemoveBackground ? removeBackgroundTolerance : removeBackgroundThreshold}
-                    onChange={(e) => enhancedRemoveBackground 
-                      ? setRemoveBackgroundTolerance(parseInt(e.target.value))
-                      : setRemoveBackgroundThreshold(parseInt(e.target.value))
-                    }
-                    className="w-full"
-                  />
-                  <p className="text-xs text-gray-500">
-                    {enhancedRemoveBackground 
-                      ? '值越高，能包含越多相似颜色；值越低，抠图越精确'
-                      : '值越高，保留的边缘越多；值越低，边缘越锐利'}
-                  </p>
-                </div>
-              </>
-            )}
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1">
-                头像尺寸比例: {avatarScale}%
-              </label>
-              <input
-                type="range"
-                min="10"
-                max="100"
-                step="5"
-                value={avatarScale}
-                onChange={(e) => setAvatarScale(parseInt(e.target.value))}
-                className="w-full"
-              />
-              <p className="text-xs text-gray-500">
-                调整头像在背景中的尺寸比例
-              </p>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-1">
-                裁剪形状:
-              </label>
+                    <div className="mt-2 ml-6">
+                      <div className="flex items-center space-x-1">
+                        <span className="text-xs">输出格式:</span>
               <select
-                value={cropShape}
-                onChange={(e) => setCropShape(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-black"
-              >
-                <option value="circle">圆形</option>
-                <option value="square">方形</option>
-                <option value="rectangle">矩形</option>
-                <option value="none">不裁剪</option>
+                          value={outputFormat}
+                          onChange={(e) => setOutputFormat(e.target.value)}
+                          className="border rounded px-2 py-1 text-xs"
+                        >
+                          <option value="png">PNG</option>
+                          <option value="webp">WebP</option>
               </select>
-              <p className="text-xs text-gray-500 mt-1">
-                选择头像的裁剪形状
-              </p>
             </div>
             
             <button
-              onClick={startAvatarComposite}
-              disabled={!avatarImageUrl || isAvatarProcessing}
-              className="w-full px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              开始合成处理
+                        className="mt-2 px-4 py-2 bg-green-500 text-white text-sm rounded hover:bg-green-600 w-full"
+                        onClick={startRemoveBackground}
+                        disabled={!removeBgImage || isRemovingBg}
+                      >
+                        移除背景
             </button>
             
-            <div className="mt-4">
-              <p className="font-medium">处理状态: <span className={isAvatarProcessing ? "text-blue-600 animate-pulse" : ""}>{avatarStatus}</span></p>
+                      {isRemovingBg && (
+                        <p className="text-blue-500 text-xs animate-pulse mt-1">{removeBgStatus || '处理中...'}</p>
+                      )}
             </div>
-            
-            {avatarCompositeResult && (
-              <div className="mt-4">
-                <h3 className="font-medium mb-2">合成结果:</h3>
-                <div className="relative w-full aspect-square border border-gray-200 rounded-md overflow-hidden bg-gray-100">
-                  <img 
-                    src={getFullImageUrl(avatarCompositeResult)} 
-                    alt="合成结果"
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-                <div className="mt-2 text-center">
-                  <a 
-                    href={getFullImageUrl(avatarCompositeResult)} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="inline-block px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-                  >
-                    在新窗口中查看/下载
-                  </a>
-                </div>
+                  )}
               </div>
             )}
           </div>
+        </div>
+          
+          {/* 第三部分：合成操作 - 移除，因为合成操作已经移到实时预览区域 */}
+          {/* 原来的第三步合成部分可以移除，因为已经添加到了实时预览区域 */}
+      </div>
+
+        {/* 右侧结果展示区域 - 3/4宽度 */}
+        <div className="w-full md:w-3/4 flex flex-col gap-6">
+          {/* 固定高度的滚动区域，包含AI背景和原始图片 */}
+          <div className="p-4 bg-white rounded-lg shadow">
+            <h2 className="text-lg font-semibold mb-3 flex items-center">
+              <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-md text-xs mr-2">预览</span>
+              图片库
+            </h2>
+            <div className="h-[500px] overflow-y-auto pr-2 mb-2 custom-scrollbar">
+              {/* AI生成背景结果 */}
+              {aiGeneratedBackground && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium mb-2 text-gray-700">AI生成的背景</h3>
+                  <div className="bg-checkered p-2 rounded">
+                    <img 
+                      src={getFullImageUrl(aiGeneratedBackground)} 
+                      alt="AI生成的背景" 
+                      className="w-full max-h-[350px] object-contain rounded"
+                  />
+                </div>
+              </div>
+            )}
+              
+              {/* 上传的LOGO或头像 */}
+              {removeBgImage && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-medium mb-2 text-gray-700">上传的LOGO或头像</h3>
+                  <div className="bg-checkered p-2 rounded">
+                    <img 
+                      src={getFullImageUrl(removeBgImage)} 
+                      alt="LOGO或头像" 
+                      className="w-full max-h-[350px] object-contain rounded"
+                      onLoad={handleImageLoad}
+                  />
+                </div>
+              </div>
+            )}
+        </div>
+      </div>
+
+          {/* 实时预览和调整控制 */}
+          {aiGeneratedBackground && (shouldRemoveBackground ? removeBgResult : removeBgImage) && (
+            <div className="p-4 bg-white rounded-lg shadow">
+              <h2 className="text-lg font-semibold mb-3 flex items-center">
+                <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-md text-xs mr-2">调整</span>
+                图像位置和大小
+              </h2>
+              
+              <div className="relative bg-checkered w-full h-[400px] overflow-hidden rounded-md border border-gray-200">
+                {/* 背景图 */}
+                <img 
+                  src={getFullImageUrl(aiGeneratedBackground)} 
+                  alt="背景" 
+                  className="absolute top-0 left-0 w-full h-full object-cover"
+                />
+                
+                {/* 可拖动的LOGO/头像 */}
+                <div 
+                  className="relative w-full h-full"
+                  onMouseDown={handleDragStart}
+                  onMouseMove={handleDragMove}
+                  onMouseUp={handleDragEnd}
+                  onMouseLeave={handleDragEnd}
+                >
+                  {/* LOGO/头像 */}
+                  <img 
+                    src={getFullImageUrl(shouldRemoveBackground ? removeBgResult : removeBgImage)}
+                    alt="可拖动的LOGO/头像"
+                    style={{
+                      position: 'absolute',
+                      top: `${logoPosition.y}%`,
+                      left: `${logoPosition.x}%`,
+                      transform: 'translate(-50%, -50%)',
+                      width: `${logoSize.width}px`,
+                      height: 'auto',
+                      cursor: isDragging ? 'grabbing' : 'grab'
+                    }}
+                  />
+                  
+                  {/* 辅助线 - 显示移动指示 */}
+                  <div 
+                    style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: '0',
+                      width: '100%',
+                      height: '1px',
+                      backgroundColor: 'rgba(255,255,255,0.3)',
+                      pointerEvents: 'none'
+                    }}
+                  ></div>
+                  <div 
+                    style={{
+                      position: 'absolute',
+                      top: '0',
+                      left: '50%',
+                      width: '1px',
+                      height: '100%',
+                      backgroundColor: 'rgba(255,255,255,0.3)',
+                      pointerEvents: 'none'
+                    }}
+                  ></div>
+          </div>
+      </div>
+
+              {/* 调整大小控制 */}
+              <div className="mt-3">
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  调整大小: {logoScale}%
+                </label>
+          <input 
+                  type="range"
+                  min="10"
+                  max="200"
+                  step="5"
+                  value={logoScale}
+                  onChange={handleScaleChange}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  向左滑动缩小，向右滑动放大（或直接拖动图像调整位置）
+                </p>
+        </div>
+        
+              {/* 合成按钮 */}
+              <div className="mt-3">
+          <button
+                  className="w-full px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700 font-medium"
+                  onClick={compositeImage}
+                >
+                  合成图像
+          </button>
+                <p className="text-xs text-gray-500 mt-1">
+                  将按照上面设置的位置和大小合成图像
+                </p>
+        </div>
+          </div>
+        )}
+        
+          {/* 透明背景的LOGO/头像 - 可以考虑移除或保留 */}
+          {removeBgResult && (
+            <div className="p-4 bg-white rounded-lg shadow">
+              <h2 className="text-lg font-semibold mb-3 flex items-center">
+                <span className="bg-green-100 text-green-700 px-2 py-1 rounded-md text-xs mr-2">结果</span>
+                透明背景的LOGO/头像
+              </h2>
+              <div className="bg-checkered p-2 rounded">
+                <img 
+                  src={removeBgResult} 
+                  alt="透明背景结果" 
+                  className="w-full max-h-[350px] object-contain rounded"
+            />
+          </div>
+              <div className="mt-2">
+                <a 
+                  href={removeBgResult} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 inline-flex items-center"
+                >
+                  下载结果
+                </a>
+                </div>
+              </div>
+            )}
+            
+          {/* 合成预览结果 - 单独显示 */}
+          {compositeResult && (
+            <div className="p-4 bg-white rounded-lg shadow">
+              <h2 className="text-lg font-semibold mb-3 flex items-center">
+                <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-md text-xs mr-2">合成</span>
+                最终效果
+              </h2>
+              <div className="border rounded-md p-2 bg-white">
+                <iframe 
+                  src={compositeResult} 
+                  className="w-full h-[400px] border-none"
+                  title="合成预览"
+                ></iframe>
+            </div>
+              <div className="mt-2">
+                <a
+                  href={compositeResult}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 inline-block"
+                >
+                  在新窗口中打开
+                </a>
+              </div>
+              </div>
+            )}
         </div>
       </div>
     </div>

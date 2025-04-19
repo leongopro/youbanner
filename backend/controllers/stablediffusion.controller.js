@@ -3,16 +3,23 @@
  * 处理AI图像生成请求和任务管理
  */
 
-const { v4: uuidv4 } = require('uuid');
-const fs = require('fs').promises;
+const express = require('express');
 const path = require('path');
-const stabilityService = require('../services/stability.service');
-const translationUtils = require('../utils/translation');
+const fs = require('fs');
+const fsSync = require('fs'); // 同步方法
+const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const sharp = require('sharp');
+const winston = require('winston');
+
+// 定义根目录变量，用于路径解析
+const rootDir = process.cwd();
+
+// 引入稳定扩散服务
+const stabilityService = require('../services/stability.service');
+const translationUtils = require('../utils/translation');
 const FormData = require('form-data');
 const imageProcessingUtils = require('../utils/imageProcessing');
-const fsSync = require('fs'); // 仅用于同步操作
 
 // 导入日志服务
 const { logger, stabilityErrorLogger } = require('../services/logger.service');
@@ -29,7 +36,9 @@ const JOB_TIMEOUT = 10 * 60 * 1000;
  */
 async function ensureDirectoryExists(dirPath) {
   try {
-    await fs.mkdir(dirPath, { recursive: true });
+    if (!fsSync.existsSync(dirPath)) {
+      fsSync.mkdirSync(dirPath, { recursive: true });
+    }
     console.log(`确保目录存在: ${dirPath} ✓`);
   } catch (error) {
     console.error(`创建目录失败 ${dirPath}:`, error);
@@ -1378,14 +1387,16 @@ function avatarComposition(req, res) {
     console.log(`[头像合成-路径分析] =================================\n`);
 
   // 验证必要参数
-  if (!prompt || !avatarUrl || !backgroundUrl) {
+  if (!prompt || !avatarUrl || (!removeBackground && !backgroundUrl)) {
     return res.status(400).json({
       success: false,
-      message: '缺少必要参数，需要提供提示词、头像图片和背景图片',
+      message: !removeBackground 
+        ? '缺少必要参数，需要提供提示词、头像图片和背景图片' 
+        : '缺少必要参数，需要提供提示词和头像图片',
       missingParams: {
         prompt: !prompt,
         avatarUrl: !avatarUrl,
-        backgroundUrl: !backgroundUrl
+        backgroundUrl: !removeBackground && !backgroundUrl
       }
     });
   }
@@ -1422,6 +1433,7 @@ function avatarComposition(req, res) {
     status: 'processing',
     prompt,
     message: '正在处理头像合成...',
+    progress: '0%',
     startTime: new Date().toISOString(),
     result: null
   };
@@ -1572,10 +1584,10 @@ function avatarComposition(req, res) {
       .then(() => {
   // 异步处理头像合成
         return processAvatarComposition(jobId, prompt, avatarFilePath, backgroundFilePath, {
-          imageStrength: parseFloat(imageStrength) || 0.35,
-          steps: parseInt(steps) || 30,
-          guidanceScale: parseFloat(guidanceScale) || 7.5,
-          negativePrompt: negativePrompt || '',
+    imageStrength: parseFloat(imageStrength) || 0.35,
+    steps: parseInt(steps) || 30,
+    guidanceScale: parseFloat(guidanceScale) || 7.5,
+    negativePrompt: negativePrompt || '',
           position: finalPosition, // 使用处理后的位置参数
           scale: parseFloat(scale) || 1,
           cropShape: cropShape || 'none',
@@ -1612,126 +1624,193 @@ function avatarComposition(req, res) {
  * @param {string} backgroundUrl - 背景图片URL
  * @param {Object} options - 其他选项
  */
-async function processAvatarComposition(jobId, prompt, avatarUrl, backgroundUrl, options) {
+const processAvatarComposition = async (jobId, prompt, avatarUrl, backgroundUrl, options = {}) => {
   try {
-    console.log(`[头像合成] 开始处理任务 ${jobId}`);
-    console.log(`[头像合成] 参数: prompt=${prompt}, avatarUrl=${avatarUrl}, backgroundUrl=${backgroundUrl}`);
-    console.log(`[头像合成] 选项:`, options);
-
-    // 定义rootDir变量，确保在使用前已经声明
-    const rootDir = path.resolve(__dirname, '../..');
-    console.log(`[头像合成] 项目根目录: ${rootDir}`);
+    console.log(`[processAvatarComposition] 开始处理 JobId: ${jobId}`);
+    console.log(`[processAvatarComposition] 参数: `, {
+      jobId, prompt, avatarUrl, backgroundUrl, options
+    });
     
-    // 添加更详细的头像URL调试信息
-    console.log(`[头像合成-调试] 收到的原始头像URL: "${avatarUrl}"`);
-    console.log(`[头像合成-调试] URL类型: ${typeof avatarUrl}`);
-    console.log(`[头像合成-调试] URL长度: ${avatarUrl ? avatarUrl.length : 'undefined'}`);
+    // 初始化任务状态
+    generationJobs[jobId] = {
+      ...generationJobs[jobId],
+      message: "正在处理头像合成...",
+      progress: 0,
+      startedAt: new Date(),
+      result: null
+    };
     
-    // 检查头像URL是否为空或无效
-    if (!avatarUrl) {
-      throw new Error('头像URL为空');
-    }
-    
-    // 需要抠图处理的标志
-    const shouldRemoveBackground = options.removeBackground === true;
-    console.log(`[头像合成] 抠图处理: ${shouldRemoveBackground ? '启用' : '不启用'}`);
-
-    // 处理头像图像 - Base64数据、文件路径或URL
-    let processedAvatarPath = avatarUrl;
-    
-    if (avatarUrl.startsWith('data:')) {
-      console.log(`[头像合成-调试] 检测到Base64编码的图像数据`);
-      // 保存Base64图像到临时文件
-      const base64Data = avatarUrl.split(',')[1];
-      if (!base64Data) {
-        throw new Error('无效的Base64图像数据');
-      }
-      
-      const tempAvatarPath = path.join(rootDir, 'uploads', `temp_avatar_${jobId}.png`);
-      console.log(`[头像合成-调试] 将Base64图像保存到临时文件: ${tempAvatarPath}`);
-      
-      // 确保uploads目录存在
-      const uploadsDir = path.join(rootDir, 'uploads');
-      if (!fsSync.existsSync(uploadsDir)) {
-        console.log(`[头像合成-调试] 创建uploads目录: ${uploadsDir}`);
-        fsSync.mkdirSync(uploadsDir, { recursive: true });
-      }
-      
-      // 将Base64数据写入文件
-      const imageBuffer = Buffer.from(base64Data, 'base64');
-      await fs.writeFile(tempAvatarPath, imageBuffer);
-      console.log(`[头像合成-调试] 成功保存Base64图像到文件: ${tempAvatarPath}`);
-      
-      // 使用新创建的文件路径
-      processedAvatarPath = tempAvatarPath;
-    }
-    
-    // 如果启用了抠图处理，处理头像
-    if (shouldRemoveBackground) {
-      console.log(`[头像合成] 开始对头像进行抠图处理`);
-      
-      // 加载头像图像
-      let avatarBuffer;
-      if (fsSync.existsSync(processedAvatarPath)) {
-        console.log(`[头像合成] 从文件加载头像: ${processedAvatarPath}`);
-        avatarBuffer = await fs.readFile(processedAvatarPath);
-      } else {
-        console.log(`[头像合成] 无法找到头像文件: ${processedAvatarPath}`);
-        throw new Error(`头像文件不存在: ${processedAvatarPath}`);
-      }
-      
-      // 执行抠图处理
-      const imageProcessor = require('../utils/imageProcessing');
-      console.log(`[头像合成] 正在执行抠图处理...`);
-      
-      // 选择抠图方法（标准或增强）
-      const enhancedMode = options.enhancedRemoveBackground === true;
-      let processedBuffer;
-      
-      if (enhancedMode) {
-        console.log(`[头像合成] 使用增强抠图模式`);
-        processedBuffer = await imageProcessor.enhancedRemoveBackground(avatarBuffer, {
-          tolerance: options.tolerance || 30,
-          featherEdges: true,
-          featherRadius: 3
-        });
-      } else {
-        console.log(`[头像合成] 使用标准抠图模式`);
-        processedBuffer = await imageProcessor.removeBackground(avatarBuffer, {
-          threshold: options.threshold || 10,
-          featherEdges: true
-        });
-      }
-      
-      // 将处理后的图像保存到新文件
-      const processedAvatarFilePath = path.join(rootDir, 'uploads', `avatar_removed_bg_${jobId}.png`);
-      await fs.writeFile(processedAvatarFilePath, processedBuffer);
-      console.log(`[头像合成] 抠图处理完成，保存到: ${processedAvatarFilePath}`);
-      
-      // 更新头像路径
-      processedAvatarPath = processedAvatarFilePath;
-    }
+    // 定义rootDir - 确保在normalizePath函数使用前定义
+    const rootDir = process.cwd();
+    console.log(`[processAvatarComposition] rootDir: ${rootDir}`);
     
     // 第1步：处理和规范化文件路径
     const normalizePath = (filePath) => {
-      if (!filePath) return null;
-      if (filePath.startsWith('http')) return filePath;
+      console.log(`[normalizePath] 开始处理文件路径: ${filePath}`);
       
-      // 确保路径是绝对路径
-      if (!path.isAbsolute(filePath)) {
-        return path.join(rootDir, filePath);
+      // 处理路径为空的情况
+      if (!filePath) {
+        console.log(`[normalizePath] 警告: 文件路径为空`);
+        return null;
       }
+      
+      // 不处理http链接
+      if (filePath.startsWith('http')) {
+        console.log(`[normalizePath] 检测到HTTP路径，不作修改: ${filePath}`);
+        return filePath;
+      }
+      
+      // 在Windows上，判断是否为绝对路径需要特殊处理
+      // 1. 如果以/开头但不是真正的绝对路径(如C:\)，则视为相对路径
+      if (filePath.startsWith('/')) {
+        console.log(`[normalizePath] 检测到以/开头的路径: ${filePath}`);
+        // 移除开头的斜杠再构建绝对路径
+        const relativePath = filePath.substring(1);
+        const absolutePath = path.join(rootDir, relativePath);
+        console.log(`[normalizePath] 将 ${filePath} 转换为 ${absolutePath}`);
+        return absolutePath;
+      }
+      
+      // 如果路径不是绝对路径，则转换为绝对路径
+      if (!path.isAbsolute(filePath)) {
+        const absolutePath = path.join(rootDir, filePath);
+        console.log(`[normalizePath] 将相对路径 ${filePath} 转换为绝对路径: ${absolutePath}`);
+        return absolutePath;
+      }
+      
+      console.log(`[normalizePath] 路径已经是绝对路径，不需修改: ${filePath}`);
       return filePath;
     };
     
     // 转换路径为绝对路径
-    const fullAvatarPath = normalizePath(processedAvatarPath);  // 使用处理后的头像路径
-    const fullBackgroundPath = normalizePath(backgroundUrl);
+    const fullAvatarPath = normalizePath(avatarUrl);
     
     console.log(`[头像合成] 规范化后的路径:`);
     console.log(`- 头像: ${fullAvatarPath}`);
-    console.log(`- 背景: ${fullBackgroundPath}`);
     
+    // 检查是否需要移除背景 (仅抠图模式)
+    if (options.removeBackground) {
+      console.log('[头像合成] 检测到背景移除选项，将执行抠图处理');
+      
+      // 更新任务状态
+      generationJobs[jobId] = {
+        ...generationJobs[jobId],
+        message: '正在处理头像背景移除...',
+        progress: '25%'
+      };
+      
+      // 加载头像图像
+      if (!fsSync.existsSync(fullAvatarPath)) {
+        console.log(`[头像合成] 警告: 指定路径不存在: ${fullAvatarPath}，尝试备选路径`);
+        
+        // 尝试备选路径
+        const alternativePaths = [
+          // 如果是以/开头，尝试移除前导斜杠的路径
+          fullAvatarPath.startsWith('/') ? path.join(rootDir, fullAvatarPath.substring(1)) : null,
+          // 尝试在uploads目录中查找
+          path.join(rootDir, 'uploads', path.basename(fullAvatarPath))
+        ].filter(Boolean);
+        
+        console.log(`[头像合成] 尝试备选路径:`, alternativePaths);
+        
+        let found = false;
+        for (const altPath of alternativePaths) {
+          if (fsSync.existsSync(altPath)) {
+            console.log(`[头像合成] 在备选路径找到文件: ${altPath}`);
+            fullAvatarPath = altPath;
+            found = true;
+            break;
+          }
+        }
+        
+        if (!found) {
+          throw new Error(`头像文件不存在: ${fullAvatarPath}`);
+        }
+      }
+      
+      // 处理头像图片，移除背景
+      let processedImagePath;
+      
+      try {
+        // 使用StabilityAI API进行背景移除
+        if (options.useStabilityApi) {
+          console.log('[头像合成] 使用Stability AI API移除背景');
+          
+          // 获取stability服务实例
+          const stabilityService = require('../services/stability.service');
+          
+          // 调用API进行背景移除
+          processedImagePath = await stabilityService.removeBackground({
+            image: fullAvatarPath,
+            outputFormat: 'png',
+            saveToFile: true,
+            outputPath: `uploads/avatar_removed_bg_${jobId}.png`
+          });
+          
+          console.log(`[头像合成] 使用API背景移除完成，保存到: ${processedImagePath}`);
+        } 
+        // 使用本地处理方法
+        else {
+          const imageProcessor = require('../utils/imageProcessing');
+          
+          if (options.enhancedRemoveBackground) {
+            console.log('[头像合成] 使用增强模式移除背景');
+            processedImagePath = await imageProcessor.enhancedRemoveBackground(
+              fullAvatarPath, 
+              `uploads/avatar_removed_bg_${jobId}.png`, 
+              options.tolerance || 30
+            );
+          } else {
+            console.log('[头像合成] 使用标准模式移除背景');
+            processedImagePath = await imageProcessor.removeBackground(
+              fullAvatarPath, 
+              `uploads/avatar_removed_bg_${jobId}.png`, 
+              options.threshold || 10
+            );
+          }
+        }
+        
+        console.log(`[头像合成] 背景已移除，保存到: ${processedImagePath}`);
+        
+        // 更新任务状态
+        generationJobs[jobId] = {
+          ...generationJobs[jobId],
+          message: '背景已移除',
+          progress: '50%'
+        };
+        
+        // 仅抠图模式，直接结束处理
+        if (!backgroundUrl) {
+          generationJobs[jobId] = {
+            ...generationJobs[jobId],
+            status: 'completed',
+            message: '头像背景移除完成',
+            progress: '100%',
+            result: processedImagePath,
+            endTime: new Date().toISOString()
+          };
+          
+          // 设置超时，清理任务数据
+          setTimeout(() => {
+            delete generationJobs[jobId];
+            logger.debug('清理完成的背景移除任务数据', { jobId });
+          }, JOB_TIMEOUT);
+          
+          return processedImagePath;
+        }
+        
+        // 如果有背景，则更新头像路径为处理后的路径，继续合成
+        fullAvatarPath = processedImagePath;
+      } catch (error) {
+        console.error('[头像抠图处理错误]', error);
+        throw new Error(`头像背景移除失败: ${error.message}`);
+      }
+    }
+    
+    // 如果不是仅抠图模式，则继续处理背景合成
+    const fullBackgroundPath = normalizePath(backgroundUrl);
+    console.log(`- 背景: ${fullBackgroundPath}`);
+
     // 第2步：合并头像和背景图片
     const mergedImageBuffer = await mergeAvatarWithBackground(fullAvatarPath, fullBackgroundPath, options.position);
     
@@ -1745,6 +1824,7 @@ async function processAvatarComposition(jobId, prompt, avatarUrl, backgroundUrl,
     generationJobs[jobId] = {
       ...generationJobs[jobId],
       message: '已合并头像和背景，正在应用AI样式...',
+      progress: '75%',
       mergedImageUrl: mergedImagePath
     };
 
@@ -1836,6 +1916,54 @@ async function mergeAvatarWithBackground(avatarPath, backgroundPath, position = 
   console.log(`[头像合并] 位置: ${position}`);
   
   try {
+    // 创建默认图像的函数
+    const createDefaultImage = async (filePath, fileType) => {
+      console.log(`[创建默认图像] 为${fileType}创建默认图像: ${filePath}`);
+      
+      // 确保目录存在
+      const dir = path.dirname(filePath);
+      try {
+        // 使用同步方法确保目录存在
+        if (!fsSync.existsSync(dir)) {
+          fsSync.mkdirSync(dir, { recursive: true });
+          console.log(`[创建默认图像] 已创建目录: ${dir}`);
+        } else {
+          console.log(`[创建默认图像] 目录已存在: ${dir}`);
+        }
+      } catch (error) {
+        console.error(`[创建默认图像] 创建目录失败: ${error.message}`);
+        throw new Error(`无法创建默认图像目录: ${error.message}`);
+      }
+      
+      // 创建一个简单的颜色图像
+      const width = fileType === '头像' ? 300 : 800;
+      const height = fileType === '头像' ? 300 : 600;
+      const color = fileType === '头像' ? '#3498db' : '#ecf0f1';
+      
+      try {
+        console.log(`[创建默认图像] 开始创建${width}x${height}的图像，颜色：${color}`);
+        
+        // 创建一个简单的PNG图像
+        // 使用更简单的方法创建纯色图像
+        const svgImage = Buffer.from(`
+        <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+          <rect width="100%" height="100%" fill="${color}"/>
+        </svg>
+        `);
+        
+        // 转换SVG为PNG
+        await sharp(svgImage)
+          .png()
+          .toFile(filePath);
+        
+        console.log(`[创建默认图像] 成功创建默认${fileType}图像: ${filePath}`);
+        return filePath;
+      } catch (error) {
+        console.error(`[创建默认图像] 创建图像失败: ${error.message}, 堆栈: ${error.stack}`);
+        throw new Error(`创建默认${fileType}图像失败: ${error.message}`);
+      }
+    };
+    
     // 验证文件是否存在和可读性，包含自动修复尝试
     const validateAndFixPath = async (filePath, fileType) => {
       console.log(`[合并验证] 开始验证${fileType}路径: ${filePath}`);
@@ -1843,10 +1971,11 @@ async function mergeAvatarWithBackground(avatarPath, backgroundPath, position = 
       
       // 检查文件路径是否为空或非字符串
       if (!filePath || typeof filePath !== 'string') {
-        throw new Error(`${fileType}路径无效: ${filePath}`);
+        console.error(`[合并验证] ${fileType}路径无效: `, filePath);
+        throw new Error(`${fileType}路径无效`);
       }
       
-      // 如果是Base64图像数据，保存为临时文件
+      // 处理Base64图像数据
       if (filePath.startsWith('data:')) {
         console.log(`[合并验证] 检测到${fileType}是Base64数据，转换为文件`);
         try {
@@ -1868,151 +1997,90 @@ async function mergeAvatarWithBackground(avatarPath, backgroundPath, position = 
           console.log(`[合并验证] 已保存${fileType}到临时文件: ${tempFilePath}`);
           
           return tempFilePath;
-        } catch (err) {
+    } catch (err) {
           console.error(`[合并验证] 保存Base64图像失败: ${err.message}`);
           throw new Error(`保存${fileType}Base64数据失败: ${err.message}`);
         }
       }
       
-      // 检查路径是否指向目录而不是文件
-      try {
-        if (fsSync.existsSync(filePath)) {
-          const stats = fsSync.statSync(filePath);
-          if (stats.isDirectory()) {
-            console.log(`[合并验证] ${fileType}路径指向目录: ${filePath}`);
-            
-            // 在目录中创建一个默认图像
-            const defaultImagePath = path.join(filePath, `default_${fileType.toLowerCase()}_${Date.now()}.png`);
-            console.log(`[合并验证] 将在目录中创建默认图像: ${defaultImagePath}`);
-            
-            // 创建一个简单的颜色图像
-            const width = fileType === '头像' ? 300 : 800;
-            const height = fileType === '头像' ? 300 : 600;
-            
-            try {
-              // 使用预设的最小PNG数据
-              const defaultData = Buffer.from([
-                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 
-                0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
-                0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0xF3, 0xFF, 0x61, 0x00, 0x00, 0x00,
-                0x01, 0x73, 0x52, 0x47, 0x42, 0x00, 0xAE, 0xCE, 0x1C, 0xE9, 0x00, 0x00,
-                0x00, 0x04, 0x67, 0x41, 0x4D, 0x41, 0x00, 0x00, 0xB1, 0x8F, 0x0B, 0xFC,
-                0x61, 0x05, 0x00, 0x00, 0x00, 0x09, 0x70, 0x48, 0x59, 0x73, 0x00, 0x00,
-                0x0E, 0xC3, 0x00, 0x00, 0x0E, 0xC3, 0x01, 0xC7, 0x6F, 0xA8, 0x64, 0x00,
-                0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x28, 0x53, 0x63, 0x60, 0x18,
-                0x05, 0x83, 0x13, 0x00, 0x00, 0x04, 0x10, 0x00, 0x01, 0x95, 0xD9, 0x93,
-                0x22, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
-                0x82
-              ]);
-              
-              // 写入文件
-              fsSync.writeFileSync(defaultImagePath, defaultData);
-              console.log(`[合并验证] 已创建默认${fileType}图像: ${defaultImagePath}`);
-              
-              return defaultImagePath;
-            } catch (err) {
-              console.error(`[合并验证] 创建默认图像失败: ${err.message}`);
-              throw new Error(`无法在${fileType}目录中创建默认图像: ${err.message}`);
-            }
-          }
-        }
-      } catch (statErr) {
-        if (statErr.message.includes('无法在') && statErr.message.includes('创建默认图像')) {
-          // 这是我们在上面抛出的特定错误，直接继续传递
-          throw statErr;
-        }
-        console.error(`[合并验证] 检查文件状态错误: ${statErr.message}`);
+      // 确保路径是绝对路径
+      let absolutePath = filePath;
+      if (!path.isAbsolute(filePath)) {
+        absolutePath = path.join(process.cwd(), filePath);
+        console.log(`[合并验证] 将相对路径转换为绝对路径: ${absolutePath}`);
       }
       
       // 检查文件是否存在
-      if (!fsSync.existsSync(filePath)) {
-        console.error(`[合并验证] ${fileType}文件不存在: ${filePath}`);
+      let fileExists = false;
+      try {
+        const stats = fsSync.statSync(absolutePath);
+        fileExists = stats.isFile();
+        console.log(`[合并验证] 检查文件路径 ${absolutePath} 存在: ${fileExists}`);
+      } catch (error) {
+        console.log(`[合并验证] 文件不存在: ${absolutePath}，错误: ${error.message}`);
         
-        // 获取文件名和扩展名
-        const dirname = path.dirname(filePath);
-        const basename = path.basename(filePath);
-        console.log(`[合并验证] 目录: ${dirname}, 文件名: ${basename}`);
+        // 尝试查找备选路径
+        const alternativePaths = [
+          // 使用相对于根目录的路径
+          path.join(process.cwd(), filePath),
+          // 如果是以/开头，移除开头的/并使用相对路径
+          filePath.startsWith('/') ? path.join(process.cwd(), filePath.substring(1)) : null,
+          // 特别处理uploads目录
+          filePath.includes('/uploads/') || filePath.includes('\\uploads\\') ? 
+            path.join(process.cwd(), 'uploads', path.basename(filePath)) : null,
+          // 如果路径直接包含文件名，尝试在uploads目录中查找
+          path.join(process.cwd(), 'uploads', path.basename(filePath))
+        ].filter(Boolean); // 过滤掉null值
         
-        // 确保目录存在
-        if (!fsSync.existsSync(dirname)) {
-          console.log(`[合并验证] 目录不存在，尝试创建: ${dirname}`);
+        console.log(`[合并验证] 尝试备选路径: `, alternativePaths);
+        
+        // 尝试每个备选路径
+        for (const altPath of alternativePaths) {
           try {
-            fsSync.mkdirSync(dirname, { recursive: true });
-            console.log(`[合并验证] 目录创建成功: ${dirname}`);
-          } catch (err) {
-            console.error(`[合并验证] 目录创建失败: ${err.message}`);
+            const altStats = fsSync.statSync(altPath);
+            if (altStats.isFile()) {
+              console.log(`[合并验证] 找到有效的备选路径: ${altPath}`);
+              absolutePath = altPath;
+              fileExists = true;
+              break;
+            }
+          } catch {
+            // 忽略错误，继续尝试下一个路径
           }
-        }
-        
-        // 定义根目录变量，避免未定义错误
-        const rootDir = process.cwd();
-        console.log(`[合并验证] 根目录: ${rootDir}`);
-        
-        // 尝试在几个常见位置查找文件
-        const possibleLocations = [
-          filePath,
-          path.join(rootDir, basename),
-          path.join(rootDir, 'uploads', basename),
-          path.join(rootDir, 'public', basename),
-          path.join(rootDir, 'public', 'generated', basename),
-        ];
-        
-        console.log(`[合并验证] 尝试在多个位置查找${fileType}文件...`);
-        
-        // 检查所有可能位置
-        for (const location of possibleLocations) {
-          if (fsSync.existsSync(location)) {
-            console.log(`[合并验证] 在 ${location} 找到${fileType}文件`);
-            return location;
-          }
-        }
-        
-        // 如果找不到任何匹配的文件，创建一个默认文件
-        console.log(`[合并验证] 未找到${fileType}文件，创建默认文件`);
-        
-        try {
-          // 创建一个简单的颜色图像
-          const tempFilePath = path.join(rootDir, 'uploads', `default_${fileType.toLowerCase()}_${Date.now()}.png`);
-          
-          // 确保uploads目录存在
-          const uploadsDir = path.join(rootDir, 'uploads');
-          if (!fsSync.existsSync(uploadsDir)) {
-            fsSync.mkdirSync(uploadsDir, { recursive: true });
-          }
-          
-          // 使用预设的最小PNG数据
-          const defaultData = Buffer.from([
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 
-            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0xF3, 0xFF, 0x61, 0x00, 0x00, 0x00,
-            0x01, 0x73, 0x52, 0x47, 0x42, 0x00, 0xAE, 0xCE, 0x1C, 0xE9, 0x00, 0x00,
-            0x00, 0x04, 0x67, 0x41, 0x4D, 0x41, 0x00, 0x00, 0xB1, 0x8F, 0x0B, 0xFC,
-            0x61, 0x05, 0x00, 0x00, 0x00, 0x09, 0x70, 0x48, 0x59, 0x73, 0x00, 0x00,
-            0x0E, 0xC3, 0x00, 0x00, 0x0E, 0xC3, 0x01, 0xC7, 0x6F, 0xA8, 0x64, 0x00,
-            0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x28, 0x53, 0x63, 0x60, 0x18,
-            0x05, 0x83, 0x13, 0x00, 0x00, 0x04, 0x10, 0x00, 0x01, 0x95, 0xD9, 0x93,
-            0x22, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
-            0x82
-          ]);
-          
-          // 写入文件
-          fsSync.writeFileSync(tempFilePath, defaultData);
-          console.log(`[合并验证] 已创建默认${fileType}文件: ${tempFilePath}`);
-          return tempFilePath;
-        } catch (err) {
-          console.error(`[合并验证] 创建默认文件失败: ${err.message}`);
-          throw new Error(`${fileType}文件不存在且无法创建默认文件`);
         }
       }
       
-      // 文件存在时检查是否可读
+      // 如果无法找到文件，创建默认图像
+      if (!fileExists) {
+        console.log(`[合并验证] 无法找到${fileType}文件，将创建默认图像`);
+        try {
+          const defaultImagePath = path.join(process.cwd(), 'uploads', `default_${fileType}_${Date.now()}.png`);
+          console.log(`[合并验证] 尝试创建默认图像: ${defaultImagePath}`);
+          
+          // 确保uploads目录存在
+          const uploadsDir = path.join(process.cwd(), 'uploads');
+          if (!fsSync.existsSync(uploadsDir)) {
+            fsSync.mkdirSync(uploadsDir, { recursive: true });
+            console.log(`[合并验证] 创建上传目录: ${uploadsDir}`);
+          }
+          
+          await createDefaultImage(defaultImagePath, fileType);
+          console.log(`[合并验证] 已创建默认${fileType}图像: ${defaultImagePath}`);
+          return defaultImagePath;
+        } catch (error) {
+          console.error(`[合并验证] 创建默认图像失败: ${error.message}`, error);
+          throw new Error(`创建默认${fileType}图像失败: ${error.message}`);
+        }
+      }
+      
+      // 确保文件可读
       try {
-        fsSync.accessSync(filePath, fsSync.constants.R_OK);
-        console.log(`[合并验证] ${fileType}文件存在且可读: ${filePath}`);
-        return filePath;
-      } catch (err) {
-        console.error(`[合并验证] ${fileType}文件权限错误: ${err.message}`);
-        throw new Error(`${fileType}文件存在但无法读取: ${err.message}`);
+        fsSync.accessSync(absolutePath, fsSync.constants.R_OK);
+        console.log(`[合并验证] 文件可读: ${absolutePath}`);
+        return absolutePath;
+      } catch (error) {
+        console.error(`[合并验证] 文件不可读: ${absolutePath}，错误: ${error.message}`);
+        throw new Error(`${fileType}文件不可读: ${absolutePath}`);
       }
     };
     
@@ -2037,8 +2105,8 @@ async function mergeAvatarWithBackground(avatarPath, backgroundPath, position = 
     
     // 读取文件以确认可以访问
     try {
-      const avatarBuffer = await fs.readFile(fixedAvatarPath);
-      const bgBuffer = await fs.readFile(fixedBackgroundPath);
+      const avatarBuffer = await fs.promises.readFile(fixedAvatarPath);
+      const bgBuffer = await fs.promises.readFile(fixedBackgroundPath);
       
       console.log(`[合并图像] 成功读取头像文件: ${avatarBuffer.length} 字节`);
       console.log(`[合并图像] 成功读取背景文件: ${bgBuffer.length} 字节`);
@@ -2374,6 +2442,208 @@ async function downloadImage(imageUrl) {
   }
 }
 
+/**
+ * 替换图像背景并重新打光
+ * @param {Object} req - 请求对象
+ * @param {Object} res - 响应对象
+ */
+function replaceBackgroundAndRelight(req, res) {
+  try {
+    const { image, backgroundPrompt, outputFormat } = req.body;
+    
+    // 验证必要参数
+    if (!image || !backgroundPrompt) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要参数：需要提供图像和背景描述提示词'
+      });
+    }
+    
+    // 生成唯一任务ID
+    const jobId = uuidv4();
+    console.log(`[背景替换] 创建新任务 ID: ${jobId}`);
+    
+    // 初始化任务状态
+    generationJobs[jobId] = {
+      status: 'processing',
+      message: '正在提交背景替换和重新打光请求...',
+      progress: '0%',
+      startTime: new Date().toISOString(),
+      result: null
+    };
+    
+    // 立即返回作业ID
+    res.status(200).json({
+      success: true,
+      jobId,
+      message: '背景替换任务已创建，正在处理中'
+    });
+    
+    // 异步处理背景替换
+    processReplaceBackground(jobId, image, backgroundPrompt, outputFormat).catch(error => {
+      console.error(`[背景替换] 处理错误: ${error.message}`);
+      generationJobs[jobId] = {
+        ...generationJobs[jobId],
+        status: 'failed',
+        error: error.message,
+        endTime: new Date().toISOString()
+      };
+    });
+  } catch (error) {
+    console.error(`[背景替换] 控制器错误: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      message: `处理请求时出错: ${error.message}`
+    });
+  }
+}
+
+/**
+ * 处理背景替换和重新打光
+ * @param {string} jobId - 任务ID
+ * @param {string} image - 图像（Base64或URL）
+ * @param {string} backgroundPrompt - 背景描述提示词
+ * @param {string} outputFormat - 输出格式
+ * @returns {Promise<void>}
+ */
+async function processReplaceBackground(jobId, image, backgroundPrompt, outputFormat = 'png') {
+  try {
+    // 更新任务状态
+    generationJobs[jobId] = {
+      ...generationJobs[jobId],
+      message: '正在处理图像和提交API请求...',
+      progress: '10%'
+    };
+    
+    // 处理图像输入
+    let imageInput;
+    
+    if (typeof image === 'string') {
+      if (image.startsWith('data:')) {
+        // 处理Base64图像
+        const base64Data = image.split(',')[1];
+        if (!base64Data) {
+          throw new Error('无效的Base64图像数据');
+        }
+        
+        // 保存到临时文件
+        const rootDir = path.resolve(__dirname, '../..');
+        const uploadsDir = path.join(rootDir, 'uploads');
+        if (!fsSync.existsSync(uploadsDir)) {
+          fsSync.mkdirSync(uploadsDir, { recursive: true });
+        }
+        
+        const imagePath = path.join(uploadsDir, `subject_${jobId}.png`);
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        await fs.writeFile(imagePath, imageBuffer);
+        
+        imageInput = imagePath;
+      } else {
+        // 处理图像URL
+        const rootDir = path.resolve(__dirname, '../..');
+        imageInput = path.isAbsolute(image) ? image : path.join(rootDir, image.replace(/^\//, ''));
+      }
+    } else {
+      throw new Error('无效的图像输入类型');
+    }
+    
+    // 引入stability服务
+    const stabilityService = require('../services/stability.service');
+    
+    // 更新任务状态
+    generationJobs[jobId] = {
+      ...generationJobs[jobId],
+      message: '正在提交背景替换请求到Stability API...',
+      progress: '25%'
+    };
+    
+    // 调用服务
+    const result = await stabilityService.replaceBackgroundAndRelight({
+      image: imageInput,
+      backgroundPrompt,
+      outputFormat,
+      saveToFile: true,
+      outputPath: `uploads/bg_replaced_${jobId}.${outputFormat}`
+    });
+    
+    // 更新任务状态
+    generationJobs[jobId] = {
+      ...generationJobs[jobId],
+      message: '背景替换请求已提交，等待API处理...',
+      progress: '35%',
+      replaceBackgroundTaskId: result.id  // 保存API返回的任务ID，用于后续查询
+    };
+    
+    // 等待处理完成
+    let isCompleted = false;
+    let attempts = 0;
+    const maxAttempts = 60;  // 最多等待60次检查（约2分钟）
+    
+    while (!isCompleted && attempts < maxAttempts) {
+      attempts++;
+      
+      // 更新任务状态
+      generationJobs[jobId] = {
+        ...generationJobs[jobId],
+        message: `正在等待背景替换处理完成(尝试${attempts}/${maxAttempts})...`,
+        progress: `${35 + Math.min(60, attempts)}%`
+      };
+      
+      // 检查任务状态
+      const statusResult = await stabilityService.checkReplaceBackgroundStatus(result.id);
+      
+      if (statusResult.status === 'completed') {
+        isCompleted = true;
+        
+        // 保存结果
+        generationJobs[jobId] = {
+          ...generationJobs[jobId],
+          message: '背景替换已完成，正在保存结果...',
+          progress: '95%'
+        };
+        
+        // 保存图像
+        const outputPath = await stabilityService.saveBgReplaceResult(result, statusResult.imageBuffer);
+        
+        // 更新任务状态为完成
+        generationJobs[jobId] = {
+          ...generationJobs[jobId],
+          status: 'completed',
+          message: '背景替换和重新打光处理完成',
+          progress: '100%',
+          result: outputPath ? `/uploads/${path.basename(outputPath)}` : null,
+          endTime: new Date().toISOString()
+        };
+        
+        return;
+      } else if (statusResult.status === 'error') {
+        throw new Error(`API处理错误: ${statusResult.error}`);
+      }
+      
+      // 等待3秒后再次检查
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    
+    // 如果达到最大尝试次数仍未完成，标记为超时
+    if (!isCompleted) {
+      throw new Error('处理超时，请稍后查看结果或重试');
+    }
+  } catch (error) {
+    console.error(`[背景替换处理] 错误: ${error.message}`);
+    
+    // 更新任务状态为失败
+    generationJobs[jobId] = {
+      ...generationJobs[jobId],
+      status: 'failed',
+      message: `背景替换处理失败: ${error.message}`,
+      error: error.message,
+      endTime: new Date().toISOString()
+    };
+    
+    throw error;
+  }
+}
+
 // 确保所有控制器方法被正确导出
 module.exports = {
   generateImage,
@@ -2384,5 +2654,7 @@ module.exports = {
   avatarComposition,
   logDetailedApiError,
   generateStableImg2Img,
-  processStableImg2ImgGeneration
+  processStableImg2ImgGeneration,
+  replaceBackgroundAndRelight,
+  processReplaceBackground
 }; 

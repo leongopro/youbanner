@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   uploadImage, 
   removeBackground,
@@ -269,6 +269,26 @@ export default function ProductPage() {
   const [isEditingText, setIsEditingText] = useState(false); // 是否在编辑文字位置
   const [fontWeight, setFontWeight] = useState('normal'); // 字体粗细
   const [fontFamily, setFontFamily] = useState('Arial'); // 字体类型
+  const [isResizingText, setIsResizingText] = useState(false); // 是否正在调整文字大小
+  const [textResizeDirection, setTextResizeDirection] = useState(''); // 文字调整方向
+  const [startTextSize, setStartTextSize] = useState(24); // 开始调整时的文字大小
+  const [startTextPosition, setStartTextPosition] = useState({x: 0, y: 0}); // 开始调整时的鼠标位置
+  const [textRotation, setTextRotation] = useState(0); // 文字旋转角度
+  const [isRotatingText, setIsRotatingText] = useState(false); // 是否正在旋转文字
+  const [startRotation, setStartRotation] = useState(0); // 开始旋转时的角度
+  const [startRotationMousePos, setStartRotationMousePos] = useState({x: 0, y: 0}); // 开始旋转时的鼠标位置
+  
+  // 添加Logo旋转相关状态
+  const [logoRotation, setLogoRotation] = useState(0); // Logo旋转角度
+  const [isRotatingLogo, setIsRotatingLogo] = useState(false); // 是否正在旋转Logo
+  const [startLogoRotation, setStartLogoRotation] = useState(0); // 开始旋转Logo时的角度
+  const [startLogoRotationMousePos, setStartLogoRotationMousePos] = useState({x: 0, y: 0}); // 开始旋转Logo时的鼠标位置
+  
+  // 添加Logo大小调整相关状态
+  const [isResizingLogo, setIsResizingLogo] = useState(false); // 是否正在调整Logo大小
+  const [logoResizeDirection, setLogoResizeDirection] = useState(''); // Logo调整方向
+  const [startLogoSize, setStartLogoSize] = useState({width: 150, height: 150}); // 开始调整时的Logo大小，使用数字类型
+  const [startLogoResizePos, setStartLogoResizePos] = useState({x: 0, y: 0}); // 开始调整时的鼠标位置
   
   // 添加风格预设状态
   const [stylePreset, setStylePreset] = useState('');
@@ -1284,34 +1304,90 @@ export default function ProductPage() {
   
   // 处理图像加载，获取原始尺寸
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = e.currentTarget;
-    const width = img.naturalWidth;
-    const height = img.naturalHeight;
-    setOriginalSize({
-      width,
-      height
+    // 获取加载的图像
+    const img = e.target as HTMLImageElement;
+    const newWidth = img.naturalWidth;
+    const newHeight = img.naturalHeight;
+    
+    // 记录尺寸信息
+    console.log('图像加载完成，原始尺寸:', { 
+      原始宽度: newWidth, 
+      原始高度: newHeight,
+      图像URL: img.src 
     });
     
-    // 设置固定的默认大小和位置
-    // 计算以原始尺寸25%的大小
-    const targetWidth = width * 0.25;
-    const targetHeight = height * 0.25;
+    // 如果尺寸无效则进行处理
+    if (newWidth <= 0 || newHeight <= 0) {
+      console.error('错误：加载的图像尺寸无效', { width: newWidth, height: newHeight });
+      
+      // 设置一个默认的原始尺寸
+      setOriginalSize({ width: 200, height: 200 });
+      setAspectRatio(1);
+      
+      // 设置默认大小
+      setLogoSize({ width: 200, height: 200 });
+      setStartLogoSize({ width: 200, height: 200 });
+      setLogoScale(100);
+      
+      // 设置图像加载状态并返回
+      setBackgroundImageLoaded(true);
+      return;
+    }
     
-    setLogoSize({ width: targetWidth, height: targetHeight });
-    setLogoScale(25); // 设置为25%的缩放比例
-    setAspectRatio(width / height);
+    // 始终更新原始尺寸和宽高比，确保信息是最新的
+    setOriginalSize({ width: newWidth, height: newHeight });
+    setAspectRatio(newWidth / newHeight);
     
-    // 固定的左上角位置
-    setLogoPosition({ x: 20, y: 20 });
-    console.log('图像加载完成，设置默认尺寸为原始的25%:', { width: targetWidth, height: targetHeight });
+    // 计算合适的初始大小（基于容器尺寸的合理比例）
+    const container = img.closest('.logo-container')?.parentElement;
+    let initialSize = 200; // 默认初始大小
+    
+    if (container) {
+      const containerRect = container.getBoundingClientRect();
+      const containerSize = Math.min(containerRect.width, containerRect.height);
+      initialSize = containerSize * 0.25; // 取容器尺寸的25%作为初始大小
+    }
+    
+    // 保持宽高比
+    let initialWidth = initialSize;
+    let initialHeight = initialSize * (newHeight / newWidth);
+    
+    // 确保最小尺寸
+    initialWidth = Math.max(initialWidth, 50);
+    initialHeight = Math.max(initialHeight, 50);
+    
+    // 如果当前没有显示图像（首次加载），则设置初始大小
+    // 否则保持当前大小不变
+    if (logoSize.width <= 0 || logoSize.height <= 0) {
+      setLogoSize({ width: initialWidth, height: initialHeight });
+      setStartLogoSize({ width: initialWidth, height: initialHeight });
+    }
+    
+    // 重新计算当前缩放比例（基于最新的originalSize）
+    const currentScale = (logoSize.width / newWidth) * 100;
+    setLogoScale(Math.round(currentScale));
+    
+    console.log('图像设置完成:', {
+      原始尺寸: { width: newWidth, height: newHeight },
+      当前大小: logoSize,
+      缩放比例: currentScale,
+      宽高比: newWidth / newHeight
+    });
+    
+    // 设置图像加载状态
+    setBackgroundImageLoaded(true);
   };
   
   // 拖动处理函数
   const handleDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    // 停止事件冒泡，防止触发父元素事件
     e.stopPropagation();
-    e.preventDefault(); // 防止其他默认行为
-    setIsDragging(true);
-    console.log('开始拖动头像');
+    
+    // 如果点击的是拖拽区域，而不是调整大小的控制点
+    if (!(e.target as HTMLElement).classList.contains('resize-handle')) {
+      setIsDragging(true);
+      console.log('开始拖动头像');
+    }
   };
   
   const handleDragMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1327,9 +1403,11 @@ export default function ProductPage() {
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
     
-    // 限制在容器内
-    const boundedX = Math.min(Math.max(x, 0), 100);
-    const boundedY = Math.min(Math.max(y, 0), 100);
+    // 扩大拖拽范围，允许logo部分移出容器
+    // 允许logo中心点在容器外围30%的范围内（增加到30%让操作更灵活）
+    const paddingPercentage = 30; // 增加可移动范围到30%
+    const boundedX = Math.min(Math.max(x, -paddingPercentage), 100 + paddingPercentage);
+    const boundedY = Math.min(Math.max(y, -paddingPercentage), 100 + paddingPercentage);
     
     setLogoPosition({ x: boundedX, y: boundedY });
     console.log('拖动头像中:', { x: boundedX, y: boundedY });
@@ -1386,19 +1464,6 @@ export default function ProductPage() {
         newWidth = deltaX;
         newHeight = maintainAspectRatio ? deltaX / aspectRatio : deltaY;
         break;
-      
-      // 边缘调整
-      case 't': // 上边
-      case 'b': // 下边
-        newHeight = deltaY;
-        newWidth = maintainAspectRatio ? deltaY * aspectRatio : newWidth;
-        break;
-      
-      case 'l': // 左边
-      case 'r': // 右边
-        newWidth = deltaX;
-        newHeight = maintainAspectRatio ? deltaX / aspectRatio : newHeight;
-        break;
     }
     
     // 确保最小尺寸
@@ -1441,7 +1506,7 @@ export default function ProductPage() {
   
   // 添加缩放增减函数
   const adjustScale = (amount: number) => {
-    const newScale = Math.min(Math.max(logoScale + amount, 10), 400); // 限制缩放范围在10%-400%
+    const newScale = Math.min(Math.max(logoScale + amount, 10), 200); // 限制缩放范围在10%-200%
     setLogoScale(newScale);
     
     if (originalSize.width > 0 && originalSize.height > 0) {
@@ -1485,6 +1550,642 @@ export default function ProductPage() {
   const toggleFontWeight = () => {
     setFontWeight(fontWeight === 'normal' ? 'bold' : 'normal');
   };
+  
+  // 处理文字大小调整开始
+  const handleTextResizeStart = (e: React.MouseEvent<HTMLDivElement>, direction: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsResizingText(true);
+    setTextResizeDirection(direction);
+    setStartTextSize(textSize);
+    setStartTextPosition({x: e.clientX, y: e.clientY});
+    console.log('开始调整文字大小:', direction, textSize);
+  };
+  
+  // 处理文字大小调整结束
+  const handleTextResizeEnd = () => {
+    if (isResizingText) {
+      setIsResizingText(false);
+      setTextResizeDirection('');
+      console.log('结束文字大小调整:', textSize);
+    }
+  };
+  
+  // 使用useEffect添加和移除文档级事件监听器
+  useEffect(() => {
+    const handleGlobalTextResizeMove = (e: globalThis.MouseEvent) => {
+      if (!isResizingText) return;
+      
+      // 计算鼠标移动距离
+      const deltaX = e.clientX - startTextPosition.x;
+      const deltaY = e.clientY - startTextPosition.y;
+      
+      // 基于当前文字大小，计算调整的幅度因子
+      const scaleFactor = Math.max(1.0, startTextSize / 50);
+      
+      // 根据调整点位置选择合适的调整方式
+      let sizeDelta = 0;
+      
+      switch (textResizeDirection) {
+        case 'br': // 右下角 - 向右下拖动放大
+          sizeDelta = Math.max(deltaX, deltaY) * 1.2 * scaleFactor; 
+          break;
+          
+        case 'bl': // 左下角 - 向左下拖动放大（负X，正Y）
+          sizeDelta = Math.max(-deltaX, deltaY) * 1.2 * scaleFactor; 
+          break;
+          
+        case 'tr': // 右上角 - 向右上拖动放大（正X，负Y）
+          sizeDelta = Math.max(deltaX, -deltaY) * 1.2 * scaleFactor; 
+          break;
+          
+        case 'tl': // 左上角 - 向左上拖动放大（负X，负Y）
+          sizeDelta = Math.max(-deltaX, -deltaY) * 1.2 * scaleFactor; 
+          break;
+      }
+      
+      // 将扩展/缩小方向与鼠标移动方向对齐
+      const isOutwardDrag = (
+        (textResizeDirection === 'br' && (deltaX > 0 || deltaY > 0)) ||
+        (textResizeDirection === 'bl' && (deltaX < 0 || deltaY > 0)) ||
+        (textResizeDirection === 'tr' && (deltaX > 0 || deltaY < 0)) ||
+        (textResizeDirection === 'tl' && (deltaX < 0 || deltaY < 0))
+      );
+      
+      // 如果是向内拖动，转换为负值
+      if (!isOutwardDrag) {
+        sizeDelta = -Math.abs(sizeDelta);
+      }
+      
+      // 应用新的文字大小，确保在合理范围内
+      const newSize = Math.max(10, Math.min(300, startTextSize + sizeDelta));
+      
+      // 只有当变化足够大时才更新状态，减少重绘
+      if (Math.abs(newSize - textSize) > 2) {
+        setTextSize(newSize);
+      }
+    };
+    
+    // 节流函数，减少事件触发频率
+    const throttledMove = (e: globalThis.MouseEvent) => {
+      // 使用requestAnimationFrame来限制更新频率
+      if (!throttledMove.frameId) {
+        throttledMove.frameId = requestAnimationFrame(() => {
+          handleGlobalTextResizeMove(e);
+          throttledMove.frameId = null;
+        });
+      }
+    };
+    // 添加类型
+    throttledMove.frameId = null as number | null;
+    
+    const handleGlobalTextResizeEnd = () => {
+      if (isResizingText) {
+        // 取消任何挂起的帧
+        if (throttledMove.frameId) {
+          cancelAnimationFrame(throttledMove.frameId);
+          throttledMove.frameId = null;
+        }
+        
+        setIsResizingText(false);
+        setTextResizeDirection('');
+      }
+    };
+    
+    if (isResizingText) {
+      // 添加document级别事件监听
+      document.addEventListener('mousemove', throttledMove);
+      document.addEventListener('mouseup', handleGlobalTextResizeEnd);
+      
+      // 组件卸载时或状态变更时清理
+      return () => {
+        if (throttledMove.frameId) {
+          cancelAnimationFrame(throttledMove.frameId);
+        }
+        document.removeEventListener('mousemove', throttledMove);
+        document.removeEventListener('mouseup', handleGlobalTextResizeEnd);
+      };
+    }
+  }, [isResizingText, textResizeDirection, startTextSize, startTextPosition, textSize]);
+  
+  // 同样为文字旋转添加document级别事件监听
+  useEffect(() => {
+    const handleGlobalTextRotateMove = (e: globalThis.MouseEvent) => {
+      if (!isRotatingText) return;
+      
+      const textElement = document.querySelector('.text-container') as HTMLElement;
+      if (!textElement) return;
+      
+      const rect = textElement.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      
+      // 计算开始角度和当前角度
+      const startAngle = Math.atan2(
+        startRotationMousePos.y - centerY,
+        startRotationMousePos.x - centerX
+      );
+      const currentAngle = Math.atan2(
+        e.clientY - centerY,
+        e.clientX - centerX
+      );
+      
+      // 计算角度差（弧度）并转换为度数
+      let angleDiff = (currentAngle - startAngle) * (180 / Math.PI);
+      
+      // 应用新的旋转角度，并确保其在0-360度范围内
+      let newRotation = (startRotation + angleDiff) % 360;
+      // 处理负角度
+      if (newRotation < 0) newRotation += 360;
+      
+      // 为了平滑旋转，对角度进行四舍五入
+      newRotation = Math.round(newRotation);
+      
+      // 只有当角度变化足够大时才更新
+      if (Math.abs(newRotation - textRotation) > 2) {
+        setTextRotation(newRotation);
+      }
+    };
+    
+    // 节流函数，减少事件触发频率
+    const throttledRotateMove = (e: globalThis.MouseEvent) => {
+      // 使用RequestAnimationFrame来限制更新频率
+      if (!throttledRotateMove.frameId) {
+        throttledRotateMove.frameId = requestAnimationFrame(() => {
+          handleGlobalTextRotateMove(e);
+          throttledRotateMove.frameId = null;
+        });
+      }
+    };
+    // 添加类型
+    throttledRotateMove.frameId = null as number | null;
+    
+    const handleGlobalTextRotateEnd = () => {
+      if (isRotatingText) {
+        // 取消任何挂起的帧
+        if (throttledRotateMove.frameId) {
+          cancelAnimationFrame(throttledRotateMove.frameId);
+          throttledRotateMove.frameId = null;
+        }
+        setIsRotatingText(false);
+      }
+    };
+    
+    if (isRotatingText) {
+      document.addEventListener('mousemove', throttledRotateMove);
+      document.addEventListener('mouseup', handleGlobalTextRotateEnd);
+      
+      return () => {
+        if (throttledRotateMove.frameId) {
+          cancelAnimationFrame(throttledRotateMove.frameId);
+        }
+        document.removeEventListener('mousemove', throttledRotateMove);
+        document.removeEventListener('mouseup', handleGlobalTextRotateEnd);
+      };
+    }
+  }, [isRotatingText, startRotation, startRotationMousePos, textRotation]);
+  
+  // 处理文字旋转结束
+  const handleTextRotateEnd = () => {
+    if (isRotatingText) {
+      setIsRotatingText(false);
+      console.log('结束文字旋转，最终角度:', textRotation);
+    }
+  };
+  
+  // 处理Logo旋转开始
+  const handleLogoRotateStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsRotatingLogo(true);
+    setStartLogoRotation(logoRotation);
+    
+    // 保存元素中心点和鼠标位置
+    const element = e.currentTarget.parentElement;
+    if (element) {
+      const rect = element.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      setStartLogoRotationMousePos({x: e.clientX, y: e.clientY});
+      
+      console.log('开始旋转Logo，当前角度:', logoRotation);
+    }
+  };
+  
+  // 处理Logo旋转结束
+  const handleLogoRotateEnd = () => {
+    if (isRotatingLogo) {
+      setIsRotatingLogo(false);
+      console.log('结束Logo旋转，最终角度:', logoRotation);
+    }
+  };
+
+  // 同样为Logo旋转添加document级别事件监听
+  useEffect(() => {
+    const handleGlobalLogoRotateMove = (e: globalThis.MouseEvent) => {
+      if (!isRotatingLogo) return;
+      
+      const logoElement = document.querySelector('.logo-container') as HTMLElement;
+      if (!logoElement) return;
+      
+      const rect = logoElement.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      
+      // 计算开始角度和当前角度
+      const startAngle = Math.atan2(
+        startLogoRotationMousePos.y - centerY,
+        startLogoRotationMousePos.x - centerX
+      );
+      const currentAngle = Math.atan2(
+        e.clientY - centerY,
+        e.clientX - centerX
+      );
+      
+      // 计算角度差（弧度）并转换为度数
+      let angleDiff = (currentAngle - startAngle) * (180 / Math.PI);
+      
+      // 应用新的旋转角度，并确保其在0-360度范围内
+      let newRotation = (startLogoRotation + angleDiff) % 360;
+      // 处理负角度
+      if (newRotation < 0) newRotation += 360;
+      
+      // 为了平滑旋转，对角度进行四舍五入
+      newRotation = Math.round(newRotation);
+      
+      // 只有当角度变化足够大时才更新
+      if (Math.abs(newRotation - logoRotation) > 2) {
+        setLogoRotation(newRotation);
+      }
+    };
+    
+    // 节流函数，减少事件触发频率
+    const throttledLogoRotateMove = (e: globalThis.MouseEvent) => {
+      // 使用RequestAnimationFrame来限制更新频率
+      if (!throttledLogoRotateMove.frameId) {
+        throttledLogoRotateMove.frameId = requestAnimationFrame(() => {
+          handleGlobalLogoRotateMove(e);
+          throttledLogoRotateMove.frameId = null;
+        });
+      }
+    };
+    // 添加类型
+    throttledLogoRotateMove.frameId = null as number | null;
+    
+    const handleGlobalLogoRotateEnd = () => {
+      if (isRotatingLogo) {
+        // 取消任何挂起的帧
+        if (throttledLogoRotateMove.frameId) {
+          cancelAnimationFrame(throttledLogoRotateMove.frameId);
+          throttledLogoRotateMove.frameId = null;
+        }
+        setIsRotatingLogo(false);
+      }
+    };
+    
+    if (isRotatingLogo) {
+      document.addEventListener('mousemove', throttledLogoRotateMove);
+      document.addEventListener('mouseup', handleGlobalLogoRotateEnd);
+      
+      return () => {
+        if (throttledLogoRotateMove.frameId) {
+          cancelAnimationFrame(throttledLogoRotateMove.frameId);
+        }
+        document.removeEventListener('mousemove', throttledLogoRotateMove);
+        document.removeEventListener('mouseup', handleGlobalLogoRotateEnd);
+      };
+    }
+  }, [isRotatingLogo, startLogoRotation, startLogoRotationMousePos, logoRotation]);
+  
+  // 处理Logo大小调整开始
+  const handleLogoResizeStart = (e: React.MouseEvent<HTMLDivElement>, direction: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    // 确保logo原始尺寸已经设置
+    if (originalSize.width <= 0 || originalSize.height <= 0) {
+      console.error('错误：未能获取logo原始尺寸，无法进行缩放');
+      return;
+    }
+    
+    setIsResizingLogo(true);
+    setLogoResizeDirection(direction);
+    
+    // 确保当前尺寸信息正确
+    setStartLogoSize({
+      width: logoSize.width || 200, 
+      height: logoSize.height || 200
+    });
+    
+    // 保存起始鼠标位置
+    setStartLogoResizePos({x: e.clientX, y: e.clientY});
+    
+    // 立即设置全局事件监听器，开始追踪鼠标移动，不需要等到下一个渲染周期
+    const initialMouseX = e.clientX;
+    const initialMouseY = e.clientY;
+    
+    let lastMouseX = initialMouseX;
+    let lastMouseY = initialMouseY;
+    let accumulatedDeltaX = 0;
+    let accumulatedDeltaY = 0;
+    
+    // 鼠标移动处理函数 - 在当前闭包内定义，以便访问初始状态
+    const handleMouseMove = (e: MouseEvent) => {
+      // 计算当前鼠标位置与上次位置的差异
+      const currentDeltaX = e.clientX - lastMouseX;
+      const currentDeltaY = e.clientY - lastMouseY;
+      
+      // 更新最后的鼠标位置
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+      
+      // 第一次移动时，如果差异太大，使用较小的值避免跳动
+      if (accumulatedDeltaX === 0 && accumulatedDeltaY === 0) {
+        // 使用经过缩放的小增量而不是完全跳过
+        accumulatedDeltaX = currentDeltaX * 0.2; // 只使用20%的初始移动量
+        accumulatedDeltaY = currentDeltaY * 0.2;
+      } else {
+        // 累积增量以跟踪总移动距离
+        accumulatedDeltaX += currentDeltaX;
+        accumulatedDeltaY += currentDeltaY;
+      }
+      
+      // 应用缩放调整逻辑
+      let absoluteDelta: number;
+      
+      // 使用固定的调整系数，不根据尺寸或速度变化
+      const adjustmentFactor = 1.5;
+      
+      // 根据不同方向应用不同的调整逻辑
+      switch (direction) {
+        case 'br': // 右下角
+          absoluteDelta = Math.max(Math.abs(accumulatedDeltaX), Math.abs(accumulatedDeltaY)) * adjustmentFactor;
+          absoluteDelta = (accumulatedDeltaX + accumulatedDeltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        case 'bl': // 左下角
+          absoluteDelta = Math.max(Math.abs(accumulatedDeltaX), Math.abs(accumulatedDeltaY)) * adjustmentFactor;
+          absoluteDelta = (-accumulatedDeltaX + accumulatedDeltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        case 'tr': // 右上角
+          absoluteDelta = Math.max(Math.abs(accumulatedDeltaX), Math.abs(accumulatedDeltaY)) * adjustmentFactor;
+          absoluteDelta = (accumulatedDeltaX - accumulatedDeltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        case 'tl': // 左上角
+          absoluteDelta = Math.max(Math.abs(accumulatedDeltaX), Math.abs(accumulatedDeltaY)) * adjustmentFactor;
+          absoluteDelta = (-accumulatedDeltaX - accumulatedDeltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        default:
+          absoluteDelta = 0;
+      }
+      
+      // 确保startLogoSize有有效值
+      const safeStartWidth = startLogoSize.width || 200;
+      
+      // 应用计算的调整量，并增加平滑处理
+      const targetWidth = safeStartWidth + absoluteDelta;
+      
+      // 使用固定的平滑插值系数
+      const smoothingFactor = 0.5;
+      
+      // 使用平滑插值计算新宽度
+      let newWidth = logoSize.width + (targetWidth - logoSize.width) * smoothingFactor;
+      
+      // 确保最小尺寸限制
+      newWidth = Math.max(20, newWidth);
+      
+      // 确保原始尺寸有效
+      const safeOriginalWidth = originalSize.width || 200;
+      
+      // 计算当前缩放比例
+      const currentScalePercentage = (newWidth / safeOriginalWidth) * 100;
+      
+      // 设置最大缩放比例为500%
+      const maxScale = 500;
+      
+      // 根据缩放比例限制计算新宽度
+      if (currentScalePercentage > maxScale) {
+        newWidth = (safeOriginalWidth * maxScale) / 100;
+      }
+      
+      // 更新大小
+      let newHeightValue: number;
+      if (maintainAspectRatio && aspectRatio > 0) {
+        newHeightValue = newWidth / aspectRatio;
+      } else {
+        // 如果不保持宽高比，使用当前高度
+        newHeightValue = (startLogoSize.height as number) || 200;
+      }
+      
+      // 设置新尺寸，确保为有效值
+      setLogoSize({width: newWidth, height: newHeightValue});
+      
+      // 计算新的缩放比例
+      const scalePercentage = (newWidth / safeOriginalWidth) * 100;
+      setLogoScale(Math.round(scalePercentage));
+    };
+    
+    // 鼠标释放处理函数
+    const handleMouseUp = () => {
+      // 移除事件监听
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      
+      // 重置状态
+      setIsResizingLogo(false);
+      setLogoResizeDirection('');
+    };
+    
+    // 添加事件监听
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    
+    console.log('开始调整Logo大小:', direction, '当前大小:', logoSize, '原始尺寸:', originalSize);
+  };
+  
+  // 处理Logo大小调整结束 - 简化，因为大部分逻辑移到了handleLogoResizeStart中
+  const handleLogoResizeEnd = () => {
+    // 空实现，实际结束逻辑在mouseup事件中处理
+    console.log('结束Logo大小调整:', logoSize);
+  };
+  
+  // 为Logo大小调整添加document级别事件监听
+  useEffect(() => {
+    let lastMouseX = 0;
+    let lastMouseY = 0;
+    let accumulatedDeltaX = 0;
+    let accumulatedDeltaY = 0;
+    
+    const handleGlobalLogoResizeMove = (e: globalThis.MouseEvent) => {
+      if (!isResizingLogo) return;
+      
+      // 计算当前鼠标位置与上次位置的差异
+      const currentDeltaX = e.clientX - lastMouseX;
+      const currentDeltaY = e.clientY - lastMouseY;
+      
+      // 更新最后的鼠标位置
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+      
+      // 第一次移动时，如果差异太大，使用较小的值避免跳动
+      if (accumulatedDeltaX === 0 && accumulatedDeltaY === 0) {
+        // 使用经过缩放的小增量而不是完全跳过
+        accumulatedDeltaX = currentDeltaX * 0.2; // 只使用20%的初始移动量
+        accumulatedDeltaY = currentDeltaY * 0.2;
+      } else {
+        // 累积增量以跟踪总移动距离
+        accumulatedDeltaX += currentDeltaX;
+        accumulatedDeltaY += currentDeltaY;
+      }
+      
+      // 应用缩放调整逻辑
+      applyLogoResizing(accumulatedDeltaX, accumulatedDeltaY);
+    };
+    
+    // 分离调整大小逻辑，以便于维护
+    const applyLogoResizing = (deltaX: number, deltaY: number) => {
+      // 使用绝对调整量，根据方向决定增大或减小
+      let absoluteDelta: number;
+      
+      // 使用固定的调整系数，不根据尺寸或速度变化
+      // 设置为1.5，这样最终步进比例为 1.5 * 0.5 = 0.75
+      const adjustmentFactor = 1.5;
+      
+      // 根据不同方向应用不同的调整逻辑
+      switch (logoResizeDirection) {
+        case 'br': // 右下角
+          absoluteDelta = Math.max(Math.abs(deltaX), Math.abs(deltaY)) * adjustmentFactor;
+          // 使用平滑的判断逻辑，让方向判断更加平滑
+          // deltaX和deltaY的加权和用于判断方向
+          absoluteDelta = (deltaX + deltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        case 'bl': // 左下角
+          absoluteDelta = Math.max(Math.abs(deltaX), Math.abs(deltaY)) * adjustmentFactor;
+          // 如果向左下拖动是正向，向右上拖动是负向
+          absoluteDelta = (-deltaX + deltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        case 'tr': // 右上角
+          absoluteDelta = Math.max(Math.abs(deltaX), Math.abs(deltaY)) * adjustmentFactor;
+          // 如果向右上拖动是正向，向左下拖动是负向
+          absoluteDelta = (deltaX - deltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        case 'tl': // 左上角
+          absoluteDelta = Math.max(Math.abs(deltaX), Math.abs(deltaY)) * adjustmentFactor;
+          // 如果向左上拖动是正向，向右下拖动是负向
+          absoluteDelta = (-deltaX - deltaY > 0) ? absoluteDelta : -absoluteDelta;
+          break;
+          
+        default:
+          absoluteDelta = 0;
+      }
+      
+      // 确保startLogoSize有有效值
+      const safeStartWidth = startLogoSize.width || 200;
+      
+      // 应用计算的调整量，并增加平滑处理
+      // 使用当前大小和目标大小之间的插值，而不是直接设置
+      const targetWidth = safeStartWidth + absoluteDelta;
+      
+      // 使用固定的平滑插值系数，不随鼠标速度变化
+      // 设置为0.5，提供中等的平滑度和响应性
+      const smoothingFactor = 0.5;
+      
+      // 使用平滑插值计算新宽度
+      let newWidth = logoSize.width + (targetWidth - logoSize.width) * smoothingFactor;
+      
+      // 确保最小尺寸限制
+      newWidth = Math.max(20, newWidth);
+      
+      // 确保原始尺寸有效
+      const safeOriginalWidth = originalSize.width || 200;
+      
+      // 计算当前缩放比例
+      const currentScalePercentage = (newWidth / safeOriginalWidth) * 100;
+      
+      // 设置最大缩放比例为500%
+      const maxScale = 500;
+      
+      // 根据缩放比例限制计算新宽度
+      if (currentScalePercentage > maxScale) {
+        newWidth = (safeOriginalWidth * maxScale) / 100;
+      }
+      
+      // 更新大小
+      let newHeightValue: number;
+      if (maintainAspectRatio && aspectRatio > 0) {
+        newHeightValue = newWidth / aspectRatio;
+      } else {
+        // 如果不保持宽高比，使用当前高度
+        newHeightValue = (startLogoSize.height as number) || 200;
+      }
+      
+      // 设置新尺寸，确保为有效值
+      setLogoSize({width: newWidth, height: newHeightValue});
+      
+      // 计算新的缩放比例
+      const scalePercentage = (newWidth / safeOriginalWidth) * 100;
+      setLogoScale(Math.round(scalePercentage));
+    };
+    
+    const handleGlobalLogoResizeStart = () => {
+      // 初始化鼠标位置跟踪
+      lastMouseX = startLogoResizePos.x;
+      lastMouseY = startLogoResizePos.y;
+      accumulatedDeltaX = 0;
+      accumulatedDeltaY = 0;
+      console.log('开始全局鼠标拖动跟踪');
+    };
+    
+    // 节流函数，减少事件触发频率
+    const throttledLogoResizeMove = (e: globalThis.MouseEvent) => {
+      // 使用RequestAnimationFrame来限制更新频率
+      if (!throttledLogoResizeMove.frameId) {
+        throttledLogoResizeMove.frameId = requestAnimationFrame(() => {
+          handleGlobalLogoResizeMove(e);
+          throttledLogoResizeMove.frameId = null;
+        });
+      }
+    };
+    // 添加类型
+    throttledLogoResizeMove.frameId = null as number | null;
+    
+    const handleGlobalLogoResizeEnd = () => {
+      if (isResizingLogo) {
+        // 取消任何挂起的帧
+        if (throttledLogoResizeMove.frameId) {
+          cancelAnimationFrame(throttledLogoResizeMove.frameId);
+          throttledLogoResizeMove.frameId = null;
+        }
+        handleLogoResizeEnd();
+      }
+    };
+    
+    if (isResizingLogo) {
+      // 调用初始化函数
+      handleGlobalLogoResizeStart();
+      
+      document.addEventListener('mousemove', throttledLogoResizeMove);
+      document.addEventListener('mouseup', handleGlobalLogoResizeEnd);
+      
+      // 在拖动过程中添加鼠标移出页面时的处理
+      document.addEventListener('mouseleave', handleGlobalLogoResizeEnd);
+      
+      return () => {
+        if (throttledLogoResizeMove.frameId) {
+          cancelAnimationFrame(throttledLogoResizeMove.frameId);
+        }
+        document.removeEventListener('mousemove', throttledLogoResizeMove);
+        document.removeEventListener('mouseup', handleGlobalLogoResizeEnd);
+        document.removeEventListener('mouseleave', handleGlobalLogoResizeEnd);
+      };
+    }
+  }, [isResizingLogo, logoResizeDirection, startLogoSize, startLogoResizePos, aspectRatio, maintainAspectRatio, originalSize?.width]);
   
   // 合成图像函数
   const compositeImage = () => {
@@ -1532,7 +2233,7 @@ export default function ProductPage() {
               position: absolute;
               top: ${logoPosition.y}%;
               left: ${logoPosition.x}%;
-              transform: translate(-50%, -50%);
+              transform: translate(-50%, -50%) rotate(${logoRotation}deg); /* 添加logo旋转 */
               width: ${logoSize.width}px;
               height: auto;
               z-index: 30;
@@ -1541,7 +2242,7 @@ export default function ProductPage() {
               position: absolute;
               top: ${textPosition.y}%;
               left: ${textPosition.x}%;
-              transform: translate(-50%, -50%);
+              transform: translate(-50%, -50%) rotate(${textRotation}deg); /* 添加文字旋转 */
               color: ${textColor};
               font-size: ${textSize}px;
               font-weight: ${fontWeight};
@@ -1575,24 +2276,21 @@ export default function ProductPage() {
       setCompositeResult(compositeUrl);
       setAiBackgroundStatus('已创建合成预览');
       
-      // 添加自动滚动到结果区域的功能
-      setTimeout(() => {
-        // 使用选择器查找合成结果区域并滚动到那里
-        const resultSection = document.querySelector('[data-result-section]');
-        if (resultSection) {
-          // 确保滚动动画平滑
-          resultSection.scrollIntoView({ 
-            behavior: 'smooth', 
-            block: 'start' 
-          });
-          console.log('滚动到合成结果区域');
-        } else {
-          console.log('找不到合成结果区域，无法滚动');
-        }
-      }, 300); // 增加延迟时间，确保DOM更新完成
+      console.log('合成预览已创建', {
+        背景: aiGeneratedBackground,
+        前景: foregroundImage,
+        文本: textContent,
+        Logo位置: logoPosition,
+        Logo大小: logoSize,
+        Logo旋转: logoRotation, // 添加日志
+        文字位置: textPosition,
+        文字大小: textSize,
+        文字旋转: textRotation // 添加日志
+      });
+      
     } catch (error) {
-      console.error('合成图像错误:', error);
-      setAiBackgroundStatus('合成图像时出错');
+      console.error('创建合成预览时出错:', error);
+      setAiBackgroundStatus('创建合成预览时出错');
     }
   };
   
@@ -1797,6 +2495,43 @@ export default function ProductPage() {
   // 添加删除文字的函数
   const deleteText = () => {
     setTextContent('');
+  };
+  
+  // 处理文字旋转开始
+  const handleTextRotateStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsRotatingText(true);
+    setStartRotation(textRotation);
+    
+    // 保存元素中心点和鼠标位置
+    const element = e.currentTarget.parentElement;
+    if (element) {
+      const rect = element.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      setStartRotationMousePos({x: e.clientX, y: e.clientY});
+      
+      console.log('开始旋转文字，当前角度:', textRotation);
+    }
+  };
+
+  // 在ProductPage函数开始位置添加这些代码（在state声明部分）
+  const textContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // 在ProductPage函数中添加这个函数，放在其他函数旁边
+  const getTextOffsetDistance = () => {
+    if (!textContainerRef.current) return 0;
+    
+    // 获取文字容器的尺寸
+    const { width, height } = textContainerRef.current.getBoundingClientRect();
+    
+    // 计算对角线长度的一半（从中心点到边缘的最大距离）
+    const diagonalHalf = Math.sqrt(width * width + height * height) / 2;
+    
+    // 根据文字大小返回适当的偏移量
+    // 基础距离(50px) + 文字大小影响的额外距离
+    return Math.min(Math.max(0, diagonalHalf - 50), 50); // 限制在0-50px的额外距离范围内
   };
 
   return (
@@ -2326,28 +3061,129 @@ export default function ProductPage() {
                       {/* 可拖动的文字 - 只需要背景已生成 */}
                       {textContent && (
                         <div
+                          ref={(el) => {
+                            // 如果元素存在，存储其尺寸信息
+                            if (el) {
+                              textContainerRef.current = el;
+                            }
+                          }}
+                          className="text-container"
                           style={{
                             position: 'absolute',
                             top: `${textPosition.y}%`,
                             left: `${textPosition.x}%`,
-                            transform: 'translate(-50%, -50%)',
+                            transform: `translate(-50%, -50%) rotate(${textRotation}deg) translateZ(0)`,
                             color: textColor,
                             fontSize: `${textSize}px`,
                             fontWeight: fontWeight,
                             fontFamily: `${fontFamily}, sans-serif`,
                             textAlign: 'center',
-                            zIndex: 40,
+                            zIndex: 40, // 文字保持在上方
                             backgroundColor: showTextBg ? textBgColor : 'transparent',
                             padding: showTextBg ? `${textPadding}px` : '0',
                             borderRadius: '8px',
                             maxWidth: '80%',
-                            cursor: 'grab',
+                            cursor: isEditingText ? 'grabbing' : 'grab',
+                            userSelect: 'none',
                             wordBreak: 'break-word',
                             whiteSpace: 'pre-wrap',
-                            lineHeight: 1.4
+                            lineHeight: 1.4,
+                            willChange: 'transform, font-size',
+                            backfaceVisibility: 'hidden',
+                            WebkitFontSmoothing: 'antialiased',
+                            contain: 'content'
                           }}
+                          onMouseDown={handleTextDragStart}
                         >
                           {formatSpecialText(textContent)}
+                          
+                          {/* 文字调整框 */}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: 0,
+                              left: 0,
+                              width: '100%',
+                              height: '100%',
+                              border: '1px dashed rgba(72, 104, 225, 0.7)',
+                              pointerEvents: 'none',
+                              boxSizing: 'border-box',
+                              boxShadow: '0 0 0 1px rgba(72, 104, 225, 0.2)',
+                              backgroundColor: 'transparent' // 确保背景透明
+                            }}
+                          ></div>
+                          
+                          {/* 左上角调整点 */}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '-6px',
+                              left: '-6px',
+                              width: '12px',
+                              height: '12px',
+                              backgroundColor: '#26284e',
+                              border: '1px solid #4868e1',
+                              borderRadius: '50%',
+                              cursor: 'nwse-resize',
+                              zIndex: 41,
+                              boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                            }}
+                            onMouseDown={(e) => handleTextResizeStart(e, 'tl')}
+                          ></div>
+                          
+                          {/* 右上角调整点 */}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '-6px',
+                              right: '-6px',
+                              width: '12px',
+                              height: '12px',
+                              backgroundColor: '#26284e',
+                              border: '1px solid #4868e1',
+                              borderRadius: '50%',
+                              cursor: 'nesw-resize',
+                              zIndex: 41,
+                              boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                            }}
+                            onMouseDown={(e) => handleTextResizeStart(e, 'tr')}
+                          ></div>
+                          
+                          {/* 右下角调整点 */}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              bottom: '-6px',
+                              right: '-6px',
+                              width: '12px',
+                              height: '12px',
+                              backgroundColor: '#26284e',
+                              border: '1px solid #4868e1',
+                              borderRadius: '50%',
+                              cursor: 'nwse-resize',
+                              zIndex: 41,
+                              boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                            }}
+                            onMouseDown={(e) => handleTextResizeStart(e, 'br')}
+                          ></div>
+                          
+                          {/* 左下角调整点 */}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              bottom: '-6px',
+                              left: '-6px',
+                              width: '12px',
+                              height: '12px',
+                              backgroundColor: '#26284e',
+                              border: '1px solid #4868e1',
+                              borderRadius: '50%',
+                              cursor: 'nesw-resize',
+                              zIndex: 41,
+                              boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                            }}
+                            onMouseDown={(e) => handleTextResizeStart(e, 'bl')}
+                          ></div>
                         </div>
                       )}
                       
@@ -2441,17 +3277,24 @@ export default function ProductPage() {
                             handleResizeMove(e);
                           } else if (isEditingText) {
                             handleTextDragMove(e);
+                          } else if (isResizingLogo) {
+                            // Logo大小调整由document级事件处理
                           }
+                          // 注意：文字大小调整和旋转现在由document级事件处理
                         }}
                         onMouseUp={() => {
                           handleDragEnd();
                           handleResizeEnd();
                           handleTextDragEnd();
+                          handleLogoResizeEnd();
+                          // 文字大小调整和旋转结束由document级事件处理
                         }}
                         onMouseLeave={() => {
                           handleDragEnd();
                           handleResizeEnd();
                           handleTextDragEnd();
+                          handleLogoResizeEnd();
+                          // 文字大小调整和旋转结束由document级事件处理
                         }}
                       >
                         {/* LOGO/头像 */}
@@ -2461,7 +3304,7 @@ export default function ProductPage() {
                               position: 'absolute',
                               top: `${logoPosition.y}%`,
                               left: `${logoPosition.x}%`,
-                              transform: 'translate(-50%, -50%)',
+                              transform: `translate(-50%, -50%) rotate(${logoRotation}deg)`,
                               width: `${logoSize.width}px`,
                               height: 'auto',
                               zIndex: 30,
@@ -2469,6 +3312,7 @@ export default function ProductPage() {
                               userSelect: 'none' // 防止选中图像内容
                             }}
                             onMouseDown={handleDragStart}
+                            className="logo-container"
                           >
                             <img 
                               src={getFullImageUrl(shouldRemoveBackground ? removeBgResult : removeBgImage)}
@@ -2477,7 +3321,7 @@ export default function ProductPage() {
                                 width: '100%',
                                 height: 'auto',
                                 pointerEvents: 'none', // 防止图片本身干扰拖拽事件
-                                transition: isDragging || isResizing ? 'none' : 'width 0.1s ease-out, height 0.1s ease-out',
+                                transition: isDragging || isResizing || isResizingLogo ? 'none' : 'width 0.1s ease-out, height 0.1s ease-out',
                                 userSelect: 'none' // 防止选中
                               }}
                               onLoad={handleImageLoad}
@@ -2489,15 +3333,16 @@ export default function ProductPage() {
                             <div
                               style={{
                                 position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                width: '100%',
-                                height: '100%',
+                                top: '-10px',
+                                left: '-10px',
+                                width: 'calc(100% + 20px)',
+                                height: 'calc(100% + 20px)',
                                 border: '1px solid rgba(72, 104, 225, 0.7)',
                                 pointerEvents: 'none',
                                 boxSizing: 'border-box',
                                 boxShadow: '0 0 0 1px rgba(72, 104, 225, 0.2)',
-                                backgroundColor: 'transparent' // 确保背景透明
+                                backgroundColor: 'transparent', // 确保背景透明
+                                padding: '10px' // 添加内边距
                               }}
                             ></div>
                             
@@ -2506,105 +3351,336 @@ export default function ProductPage() {
                             <div
                               style={{
                                 position: 'absolute',
-                                top: '-6px',
-                                left: '-6px',
-                                width: '12px',
-                                height: '12px',
-                                backgroundColor: '#26284e',
-                                border: '1px solid #4868e1',
+                                top: '-25px',  // 从-20px调整为-25px
+                                left: '-25px', // 从-20px调整为-25px
+                                width: '30px',  // 从20px调整为30px
+                                height: '30px', // 从20px调整为30px
+                                backgroundColor: 'rgba(38, 40, 78, 0.9)',
+                                border: '2px solid #4868e1',
                                 borderRadius: '50%',
                                 cursor: 'nwse-resize',
-                                zIndex: 11,
-                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)',
-                                userSelect: 'none' // 防止文本选择
+                                zIndex: 31,  
+                                boxShadow: '0 0 8px rgba(72, 104, 225, 0.7)',
+                                userSelect: 'none', 
+                                touchAction: 'none' 
                               }}
-                              onMouseDown={(e) => handleResizeStart(e, 'tl')}
+                              className="resize-handle"
+                              onMouseDown={(e) => handleLogoResizeStart(e, 'tl')}
                             ></div>
                             
                             {/* 右上角 */}
                             <div
                               style={{
                                 position: 'absolute',
-                                top: '-6px',
-                                right: '-6px',
-                                width: '12px',
-                                height: '12px',
-                                backgroundColor: '#26284e',
-                                border: '1px solid #4868e1',
+                                top: '-25px', // 从-20px调整为-25px
+                                right: '-25px', // 从-20px调整为-25px
+                                width: '30px', // 从20px调整为30px
+                                height: '30px', // 从20px调整为30px
+                                backgroundColor: 'rgba(38, 40, 78, 0.9)',
+                                border: '2px solid #4868e1',
                                 borderRadius: '50%',
                                 cursor: 'nesw-resize',
-                                zIndex: 11,
-                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                                zIndex: 31,
+                                boxShadow: '0 0 8px rgba(72, 104, 225, 0.7)',
+                                userSelect: 'none',
+                                touchAction: 'none'
                               }}
-                              onMouseDown={(e) => handleResizeStart(e, 'tr')}
+                              className="resize-handle"
+                              onMouseDown={(e) => handleLogoResizeStart(e, 'tr')}
                             ></div>
                             
                             {/* 左下角 */}
                             <div
                               style={{
                                 position: 'absolute',
-                                bottom: '-6px',
-                                left: '-6px',
-                                width: '12px',
-                                height: '12px',
-                                backgroundColor: '#26284e',
-                                border: '1px solid #4868e1',
+                                bottom: '-25px', // 从-20px调整为-25px
+                                left: '-25px', // 从-20px调整为-25px
+                                width: '30px', // 从20px调整为30px
+                                height: '30px', // 从20px调整为30px
+                                backgroundColor: 'rgba(38, 40, 78, 0.9)',
+                                border: '2px solid #4868e1',
                                 borderRadius: '50%',
                                 cursor: 'nesw-resize',
-                                zIndex: 11,
-                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                                zIndex: 31,
+                                boxShadow: '0 0 8px rgba(72, 104, 225, 0.7)',
+                                userSelect: 'none',
+                                touchAction: 'none'
                               }}
-                              onMouseDown={(e) => handleResizeStart(e, 'bl')}
+                              className="resize-handle"
+                              onMouseDown={(e) => handleLogoResizeStart(e, 'bl')}
                             ></div>
                             
                             {/* 右下角 */}
                             <div
                               style={{
                                 position: 'absolute',
-                                bottom: '-6px',
-                                right: '-6px',
-                                width: '12px',
-                                height: '12px',
-                                backgroundColor: '#26284e',
-                                border: '1px solid #4868e1',
+                                bottom: '-25px', // 从-20px调整为-25px
+                                right: '-25px', // 从-20px调整为-25px
+                                width: '30px', // 从20px调整为30px
+                                height: '30px', // 从20px调整为30px
+                                backgroundColor: 'rgba(38, 40, 78, 0.9)',
+                                border: '2px solid #4868e1',
                                 borderRadius: '50%',
                                 cursor: 'nwse-resize',
-                                zIndex: 11,
-                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                                zIndex: 31,
+                                boxShadow: '0 0 8px rgba(72, 104, 225, 0.7)',
+                                userSelect: 'none',
+                                touchAction: 'none'
                               }}
-                              onMouseDown={(e) => handleResizeStart(e, 'br')}
+                              className="resize-handle"
+                              onMouseDown={(e) => handleLogoResizeStart(e, 'br')}
+                            ></div>
+                            
+                            {/* 添加旋转控制器 - 从logo中心到旋转圈的虚线 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '0',
+                                left: '50%',
+                                width: '1px',
+                                height: '50px', // 从100px缩短到50px
+                                borderLeft: '2px dashed rgba(72, 104, 225, 0.7)',
+                                transform: 'translateX(-50%)', 
+                                zIndex: 29,
+                                pointerEvents: 'none'
+                              }}
+                            ></div>
+                            
+                            {/* 旋转控制把手 - 位于虚线的末端 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '-50px', // 从-100px改为-50px
+                                left: '50%',
+                                transform: 'translate(-50%, 0)', // 水平居中
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '50%',
+                                backgroundColor: '#4868e1',
+                                border: '2px solid white',
+                                zIndex: 31,
+                                cursor: 'grab',
+                                boxShadow: '0 0 10px rgba(0,0,0,0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}
+                              className="rotate-handle animate-pulse"
+                              onMouseDown={handleLogoRotateStart}
+                            >
+                              <svg 
+                                xmlns="http://www.w3.org/2000/svg" 
+                                width="18" 
+                                height="18" 
+                                viewBox="0 0 24 24" 
+                                fill="none" 
+                                stroke="white" 
+                                strokeWidth="2" 
+                                strokeLinecap="round" 
+                                strokeLinejoin="round"
+                              >
+                                <path d="M15 4.55a8 8 0 0 0-6 14.9M9 15v5H4" />
+                              </svg>
+                            </div>
+                            
+                            {/* 从圆圈中点到logo中点的虚线 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '-50px', // 从-100px改为-50px
+                                left: '50%',
+                                width: '1px',
+                                height: '50px', // 从100px缩短到50px
+                                borderLeft: '2px dashed rgba(72, 104, 225, 0.7)',
+                                transform: 'translateX(-50%)', 
+                                zIndex: 29,
+                                pointerEvents: 'none'
+                              }}
                             ></div>
                           </div>
                         )}
                         
                         {/* 可拖动的文字 */}
                         {textContent && (
-                          <div
-                            style={{
-                              position: 'absolute',
-                              top: `${textPosition.y}%`,
-                              left: `${textPosition.x}%`,
-                              transform: 'translate(-50%, -50%)',
-                              color: textColor,
-                              fontSize: `${textSize}px`,
-                              fontWeight: fontWeight,
-                              fontFamily: `${fontFamily}, sans-serif`,
-                              textAlign: 'center',
-                              zIndex: 40,
-                              backgroundColor: showTextBg ? textBgColor : 'transparent',
-                              padding: showTextBg ? `${textPadding}px` : '0',
-                              borderRadius: '8px',
-                              maxWidth: '80%',
-                              cursor: isEditingText ? 'grabbing' : 'grab',
-                              userSelect: 'none',
-                              wordBreak: 'break-word',
-                              whiteSpace: 'pre-wrap',
-                              lineHeight: 1.4
-                            }}
-                            onMouseDown={handleTextDragStart}
-                          >
-                            {formatSpecialText(textContent)}
-                          </div>
+                          <>
+                            {/* 垂直于文字的虚线旋转控制器 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: `${textPosition.y}%`,
+                                left: `${textPosition.x}%`,
+                                width: '50px',  // 从100px缩短到50px
+                                height: '2px',
+                                borderTop: '2px dashed #4868e1',
+                                transform: `rotate(${textRotation + 90}deg)`, // 垂直于文字，以中心为起点
+                                transformOrigin: 'left center', // 修改变换原点为左侧中心点
+                                zIndex: 45, // 提高z-index，确保在文字上层
+                                pointerEvents: 'none'
+                              }}
+                            ></div>
+                            
+                            {/* 旋转控制把手 - 使用绝对定位，基于文字位置计算 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                // 使用三角函数计算精确坐标
+                                top: `calc(${textPosition.y}% + ${Math.sin((textRotation + 90) * Math.PI / 180) * (50 + getTextOffsetDistance())}px)`,
+                                left: `calc(${textPosition.x}% + ${Math.cos((textRotation + 90) * Math.PI / 180) * (50 + getTextOffsetDistance())}px)`,
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '50%',
+                                backgroundColor: '#4868e1',
+                                border: '2px solid white',
+                                transform: `translate(-50%, -50%) rotate(${textRotation}deg)`, // 只需旋转自身
+                                zIndex: 45, // 提高z-index，确保在文字上层
+                                cursor: 'grab',
+                                boxShadow: '0 0 10px rgba(0,0,0,0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}
+                              onMouseDown={handleTextRotateStart}
+                              className="animate-pulse"
+                            >
+                              <svg 
+                                xmlns="http://www.w3.org/2000/svg" 
+                                width="18" 
+                                height="18" 
+                                viewBox="0 0 24 24" 
+                                fill="none" 
+                                stroke="white" 
+                                strokeWidth="2" 
+                                strokeLinecap="round" 
+                                strokeLinejoin="round"
+                                style={{
+                                  transform: `rotate(${-textRotation - 90}deg)` // 保持图标方向一致
+                                }}
+                              >
+                                <path d="M15 4.55a8 8 0 0 0-6 14.9M9 15v5H4" />
+                              </svg>
+                            </div>
+                            
+                            {/* 文字容器 */}
+                            <div
+                              className="text-container"
+                              style={{
+                                position: 'absolute',
+                                top: `${textPosition.y}%`,
+                                left: `${textPosition.x}%`,
+                                transform: `translate(-50%, -50%) rotate(${textRotation}deg) translateZ(0)`,
+                                color: textColor,
+                                fontSize: `${textSize}px`,
+                                fontWeight: fontWeight,
+                                fontFamily: `${fontFamily}, sans-serif`,
+                                textAlign: 'center',
+                                zIndex: 40, // 文字保持在上方
+                                backgroundColor: showTextBg ? textBgColor : 'transparent',
+                                padding: showTextBg ? `${textPadding}px` : '0',
+                                borderRadius: '8px',
+                                maxWidth: '80%',
+                                cursor: isEditingText ? 'grabbing' : 'grab',
+                                userSelect: 'none',
+                                wordBreak: 'break-word',
+                                whiteSpace: 'pre-wrap',
+                                lineHeight: 1.4,
+                                willChange: 'transform, font-size',
+                                backfaceVisibility: 'hidden',
+                                WebkitFontSmoothing: 'antialiased',
+                                contain: 'content'
+                              }}
+                              onMouseDown={handleTextDragStart}
+                            >
+                              {formatSpecialText(textContent)}
+                              
+                              {/* 文字调整框 */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: 0,
+                                  left: 0,
+                                  width: '100%',
+                                  height: '100%',
+                                  border: '1px dashed rgba(72, 104, 225, 0.7)',
+                                  pointerEvents: 'none',
+                                  boxSizing: 'border-box',
+                                  boxShadow: '0 0 0 1px rgba(72, 104, 225, 0.2)',
+                                  backgroundColor: 'transparent' // 确保背景透明
+                                }}
+                              ></div>
+                              
+                              {/* 左上角调整点 */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: '-6px',
+                                  left: '-6px',
+                                  width: '12px',
+                                  height: '12px',
+                                  backgroundColor: '#26284e',
+                                  border: '1px solid #4868e1',
+                                  borderRadius: '50%',
+                                  cursor: 'nwse-resize',
+                                  zIndex: 41,
+                                  boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                                }}
+                                onMouseDown={(e) => handleTextResizeStart(e, 'tl')}
+                              ></div>
+                              
+                              {/* 右上角调整点 */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: '-6px',
+                                  right: '-6px',
+                                  width: '12px',
+                                  height: '12px',
+                                  backgroundColor: '#26284e',
+                                  border: '1px solid #4868e1',
+                                  borderRadius: '50%',
+                                  cursor: 'nesw-resize',
+                                  zIndex: 41,
+                                  boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                                }}
+                                onMouseDown={(e) => handleTextResizeStart(e, 'tr')}
+                              ></div>
+                              
+                              {/* 右下角调整点 */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  bottom: '-6px',
+                                  right: '-6px',
+                                  width: '12px',
+                                  height: '12px',
+                                  backgroundColor: '#26284e',
+                                  border: '1px solid #4868e1',
+                                  borderRadius: '50%',
+                                  cursor: 'nwse-resize',
+                                  zIndex: 41,
+                                  boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                                }}
+                                onMouseDown={(e) => handleTextResizeStart(e, 'br')}
+                              ></div>
+                              
+                              {/* 左下角调整点 */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  bottom: '-6px',
+                                  left: '-6px',
+                                  width: '12px',
+                                  height: '12px',
+                                  backgroundColor: '#26284e',
+                                  border: '1px solid #4868e1',
+                                  borderRadius: '50%',
+                                  cursor: 'nesw-resize',
+                                  zIndex: 41,
+                                  boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                                }}
+                                onMouseDown={(e) => handleTextResizeStart(e, 'bl')}
+                              ></div>
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
@@ -2643,7 +3719,7 @@ export default function ProductPage() {
                         <input
                           type="range"
                           min="10"
-                          max="400"
+                          max="200"
                           step="5"
                           value={logoScale}
                           onChange={handleScaleChange}

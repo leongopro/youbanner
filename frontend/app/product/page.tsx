@@ -1708,25 +1708,64 @@ export default function ProductPage() {
   // 修改条件渲染逻辑
   // 判断函数：是否应该显示"初始预览"
   const shouldShowInitialPreview = () => {
-    // 只要有背景就不显示初始预览
-    if (aiGeneratedBackground) return false;
+    // 如果正在生成AI背景但已经有背景，继续显示背景而不是初始预览
+    if (isGeneratingAiBackground && aiGeneratedBackground) return false;
     
-    // 只有在完全没有背景时才显示初始预览
-    return true;
+    // 如果有上传的logo或文字内容，也应该保持显示背景预览
+    if ((removeBgImage || removeBgResult || textContent) && aiGeneratedBackground) return false;
+    
+    // 如果正在生成AI背景且没有现有背景，显示初始预览
+    if (isGeneratingAiBackground && !aiGeneratedBackground) return true;
+    
+    // 如果没有AI背景，显示初始预览
+    if (!aiGeneratedBackground) return true;
+    
+    return false;
   };
   
   // 判断函数：是否应该显示"背景预览"
   const shouldShowBackgroundPreview = () => {
-    // 始终返回false，隐藏背景预览部分
+    // 如果正在生成AI背景但已经有背景，保持显示背景预览
+    if (isGeneratingAiBackground && aiGeneratedBackground) return true;
+    
+    // 必须有背景且不在生成中
+    if (!aiGeneratedBackground || (isGeneratingAiBackground && !aiGeneratedBackground)) {
+      // 如果已经停止生成但背景为null，尝试设置一个默认图像
+      if (!isGeneratingAiBackground && !aiGeneratedBackground) {
+        console.log('生成已停止但背景为null，尝试设置默认图像');
+        // 设置一个1x1透明像素作为默认图像
+        setTimeout(() => {
+          if (!aiGeneratedBackground) {
+            console.log('设置默认测试图像');
+            setAiGeneratedBackground('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+            setAiBackgroundStatus('使用默认图像');
+            // 不再重置logo位置
+          }
+        }, 500);
+      }
+      
+      return false;
+    }
+    
+    // 修改：如果有背景，但没有LOGO或正在处理LOGO背景，则显示背景预览
+    // 允许用户先生成背景再上传LOGO或跳过LOGO直接添加文字
+    if (!shouldShowFullPreview()) {
+      return true;
+    }
+    
     return false;
   };
   
   // 判断函数：是否应该显示"实时预览与调整"
   const shouldShowFullPreview = () => {
-    // 只要有背景就显示完整预览，不受其他状态影响
+    // 修改：只要有背景且不在生成中或已有背景但正在生成新背景，就可以显示完整预览
+    // 这样在生成新背景时不会改变显示模式
     if (!aiGeneratedBackground) return false;
     
-    // 始终显示实时预览和调整
+    // 如果正在移除背景处理中，不显示完整预览
+    if (isRemovingBg) return false;
+    
+    // 有背景就可以直接显示完整预览，允许用户添加文字或LOGO
     return true;
   };
 
@@ -2139,7 +2178,7 @@ export default function ProductPage() {
               <div className="smart-card overflow-hidden" style={{ minHeight: '700px' }}>
                 {/* 背景预览区域 - 在背景图加载过程中添加头像显示 */}
                 {shouldShowBackgroundPreview() && (
-                  <div className="p-6 space-y-6 h-full">
+                  <div className="p-6 space-y-6 h-full" style={{ display: 'none' }}>
                     <h2 className="text-xl font-medium">背景预览</h2>
                     
                     <div className="relative bg-checkered w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' }}> {/* 16:9比例 */}

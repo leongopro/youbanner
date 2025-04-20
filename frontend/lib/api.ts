@@ -19,6 +19,10 @@ interface GenerateBackgroundParams {
   height?: number;
   steps?: number;
   guidanceScale?: number;
+  cfg_scale?: number;
+  output_format?: string;
+  style_preset?: string;
+  seed?: number;
 }
 
 interface GenerateBannerParams {
@@ -275,10 +279,252 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<Api
  */
 export async function generateBackgroundImage(params: GenerateBackgroundParams): Promise<ApiResponse<JobResponse>> {
   logger.info('生成背景', '开始生成AI背景图片', { params });
-  return fetchApi<JobResponse>('/api/stable-diffusion/generate', {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
+  
+  try {
+    console.log('发送背景生成请求，参数:', JSON.stringify(params));
+    
+    // 确保params包含所有必要的参数
+    if (!params.prompt) {
+      console.error('缺少必要的prompt参数');
+      return { error: '缺少必要的prompt参数' };
+    }
+    
+    // 判断是否直接调用Stability API
+    const useDirectAPI = true; // 启用直接API调用
+    
+    if (useDirectAPI) {
+      // 直接调用Stability API
+      try {
+        // 获取API Key
+        let apiKey = process.env.NEXT_PUBLIC_STABILITY_API_KEY;
+        
+        // 如果没有环境变量中的API Key，尝试从API获取
+        if (!apiKey) {
+          try {
+            const keyResponse = await fetchApi<{key: string}>('/api/stability/get-api-key');
+            if (keyResponse.data?.key) {
+              apiKey = keyResponse.data.key;
+            } else {
+              return { error: '无法获取Stability API密钥' };
+            }
+          } catch (keyError) {
+            return { error: '获取API密钥失败' };
+          }
+        }
+        
+        // 创建FormData
+        const formData = new FormData();
+        formData.append('prompt', params.prompt);
+        
+        if (params.style_preset) {
+          formData.append('style_preset', params.style_preset);
+        }
+        
+        if (params.output_format) {
+          formData.append('output_format', params.output_format);
+        }
+        
+        // 是否直接返回图像数据
+        const returnImageDirectly = true;
+        
+        console.log('直接调用Stability API, 参数:', {
+          prompt: params.prompt,
+          style_preset: params.style_preset,
+          output_format: params.output_format,
+          返回格式: returnImageDirectly ? 'image/*' : 'application/json'
+        });
+        
+        // 直接调用Stability API
+        const response = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Accept': returnImageDirectly ? 'image/*' : 'application/json'
+          },
+          body: formData
+        });
+        
+        if (!response.ok) {
+          let errorMsg;
+          try {
+            const errorData = await response.json();
+            errorMsg = errorData.message || errorData.error || `请求失败: ${response.status}`;
+          } catch (e) {
+            errorMsg = `请求失败: ${response.status} ${response.statusText}`;
+          }
+          console.error('Stability API请求失败:', errorMsg);
+          return { error: errorMsg };
+        }
+        
+        // 处理响应
+        if (returnImageDirectly) {
+          // 直接返回图像数据
+          const contentType = response.headers.get('content-type') || 'image/webp';
+          console.log('收到图像响应，内容类型:', contentType);
+          
+          // 将图片转换为Base64
+          const imageBuffer = await response.arrayBuffer();
+          const base64 = btoa(
+            new Uint8Array(imageBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+          );
+          
+          const imageUrl = `data:${contentType};base64,${base64}`;
+          console.log('创建了Base64图像URL, 长度:', imageUrl.length);
+          
+          // 返回一个结构与JobResponse兼容的对象
+          return { 
+            data: { 
+              jobId: 'direct-' + Date.now(), 
+              status: 'completed',
+              direct: true,
+              imageUrl: imageUrl
+            } as any
+          };
+        } else {
+          // 处理JSON响应
+          const jsonData = await response.json();
+          return { data: jsonData };
+        }
+      } catch (directApiError: any) {
+        console.error('直接调用Stability API失败:', directApiError);
+        // 如果直接调用失败，回退到后端API
+        console.log('回退到后端API...');
+      }
+    }
+    
+    // 以下是原始后端API调用代码
+    const response = await fetchApi<JobResponse>('/api/stable-diffusion/generate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    
+    console.log('背景生成响应:', JSON.stringify(response));
+    
+    if (response.error) {
+      console.error('背景生成请求失败:', response.error);
+      return response;
+    }
+    
+    // 验证响应数据
+    if (!response.data) {
+      console.error('背景生成响应中没有data字段');
+      return { error: '服务器响应不包含有效数据' };
+    }
+    
+    // 检查响应中是否包含jobId或id
+    if (!response.data.jobId && !response.data.id) {
+      console.error('响应中没有jobId或id:', response.data);
+      
+      // 尝试从响应中提取可能的jobId
+      const possibleJobId = extractPossibleJobId(response.data);
+      if (possibleJobId) {
+        console.log('提取到可能的jobId:', possibleJobId);
+        response.data.jobId = possibleJobId;
+      } else {
+        // 检查响应中是否包含imageUrl字段
+        const imageUrl = extractImageUrl(response.data);
+        if (imageUrl) {
+          console.log('响应中包含imageUrl字段:', imageUrl);
+          // 创建一个包含imageUrl的合成响应
+          return { 
+            data: { 
+              jobId: 'direct-' + Date.now(), 
+              status: 'completed',
+              imageUrl: imageUrl
+            } as any
+          };
+        } else {
+          return { error: '响应中不包含有效的jobId或imageUrl' };
+        }
+      }
+    }
+    
+    console.log('背景生成请求成功，jobId:', response.data.jobId || response.data.id);
+    
+    // 确保返回的响应总是包含jobId字段
+    if (response.data.id && !response.data.jobId) {
+      response.data.jobId = response.data.id;
+    }
+    
+    return response;
+  } catch (error: any) {
+    console.error('背景生成请求异常:', error?.message, error);
+    return { error: `背景生成失败: ${error?.message || '未知错误'}` };
+  }
+}
+
+// 辅助函数：尝试从响应中提取可能的jobId
+function extractPossibleJobId(data: any): string | null {
+  if (!data || typeof data !== 'object') return null;
+  
+  // 常见的jobId字段名变体
+  const possibleJobIdFields = ['jobId', 'job_id', 'id', 'taskId', 'task_id', 'requestId', 'request_id'];
+  
+  for (const field of possibleJobIdFields) {
+    if (data[field] && typeof data[field] === 'string') {
+      return data[field];
+    }
+  }
+  
+  // 递归搜索嵌套对象
+  for (const key in data) {
+    if (typeof data[key] === 'object' && data[key] !== null) {
+      const nestedJobId = extractPossibleJobId(data[key]);
+      if (nestedJobId) return nestedJobId;
+    }
+  }
+  
+  return null;
+}
+
+// 辅助函数：尝试从响应中提取imageUrl
+function extractImageUrl(data: any): string | null {
+  if (!data || typeof data !== 'object') return null;
+  
+  // 直接检查常见的URL字段
+  const urlFields = ['imageUrl', 'image_url', 'url', 'image', 'path', 'file', 'fileUrl', 'file_url'];
+  
+  for (const field of urlFields) {
+    if (data[field] && typeof data[field] === 'string') {
+      const url = data[field];
+      if (isLikelyImageUrl(url)) return url;
+    }
+  }
+  
+  // 递归搜索嵌套对象
+  for (const key in data) {
+    if (typeof data[key] === 'object' && data[key] !== null) {
+      const nestedUrl = extractImageUrl(data[key]);
+      if (nestedUrl) return nestedUrl;
+    } else if (typeof data[key] === 'string') {
+      // 检查所有字符串值是否像图片URL
+      const value = data[key];
+      if (isLikelyImageUrl(value)) return value;
+    }
+  }
+  
+  return null;
+}
+
+// 辅助函数：判断一个字符串是否可能是图片URL
+function isLikelyImageUrl(str: string): boolean {
+  if (!str) return false;
+  
+  // 检查是否是URL格式
+  const isUrl = str.startsWith('http://') || 
+                str.startsWith('https://') || 
+                str.startsWith('/');
+                
+  // 检查是否包含常见图片扩展名或路径
+  const hasImageIndicator = str.includes('.png') || 
+                           str.includes('.jpg') || 
+                           str.includes('.jpeg') ||
+                           str.includes('.webp') ||
+                           str.includes('/uploads/') ||
+                           str.includes('/generated/') ||
+                           str.includes('/images/');
+                           
+  return isUrl && hasImageIndicator;
 }
 
 /**
@@ -286,20 +532,76 @@ export async function generateBackgroundImage(params: GenerateBackgroundParams):
  */
 export async function checkBackgroundStatus(jobId: string): Promise<ApiResponse<BackgroundStatusResponse>> {
   logger.debug('检查状态', `检查背景生成状态: ${jobId}`);
+  
   // 尝试从两个可能的端点获取状态
   try {
     // 先尝试新的端点
+    console.log(`尝试从新端点查询作业状态: /api/stability/v2beta/status/${jobId}`);
     const response = await fetchApi<BackgroundStatusResponse>(`/api/stability/v2beta/status/${jobId}`);
+    
     if (!response.error) {
+      console.log('从新端点成功获取状态:', response.data);
+      
+      // 检查并打印响应结构详情
+      if (response.data) {
+        console.log('响应状态:', response.data.status);
+        console.log('是否包含result对象:', !!response.data.result);
+        
+        if (response.data.result) {
+          console.log('result包含imageUrl:', !!response.data.result.imageUrl);
+          
+          if (response.data.result.imageUrl) {
+            console.log('找到的imageUrl:', response.data.result.imageUrl);
+          }
+        }
+        
+        // 检查是否有其他可能的图像URL字段
+        const checkForImageUrl = (obj: any, prefix = '') => {
+          if (!obj || typeof obj !== 'object') return;
+          
+          Object.keys(obj).forEach(key => {
+            const fullPath = prefix ? `${prefix}.${key}` : key;
+            
+            if (typeof obj[key] === 'string' && 
+               (key.toLowerCase().includes('url') || key.toLowerCase().includes('image'))) {
+              console.log(`发现可能的图像URL字段: ${fullPath} = ${obj[key]}`);
+            } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+              checkForImageUrl(obj[key], fullPath);
+            }
+          });
+        };
+        
+        checkForImageUrl(response.data);
+      }
+      
       return response;
     }
     
     // 如果新端点失败，回退到旧端点
-    console.log('新API端点失败，尝试旧端点');
-    return fetchApi<BackgroundStatusResponse>(`/api/stable-diffusion/status/${jobId}`);
+    console.log('新API端点失败，尝试旧端点: /api/stable-diffusion/status/' + jobId);
+    const fallbackResponse = await fetchApi<BackgroundStatusResponse>(`/api/stable-diffusion/status/${jobId}`);
+    
+    // 也为旧端点添加详细日志
+    if (fallbackResponse.data) {
+      console.log('从旧端点成功获取状态:', fallbackResponse.data);
+      console.log('响应状态:', fallbackResponse.data.status);
+      console.log('是否包含result对象:', !!fallbackResponse.data.result);
+      
+      if (fallbackResponse.data.result) {
+        console.log('result包含imageUrl:', !!fallbackResponse.data.result.imageUrl);
+        
+        if (fallbackResponse.data.result.imageUrl) {
+          console.log('找到的imageUrl:', fallbackResponse.data.result.imageUrl);
+        }
+      }
+    } else if (fallbackResponse.error) {
+      console.error('旧端点也失败:', fallbackResponse.error);
+    }
+    
+    return fallbackResponse;
   } catch (error: any) {
-    console.error('状态检查错误:', error);
-    return { error: '检查状态失败' };
+    console.error('状态检查错误:', error, typeof error, error?.message);
+    return { error: `检查状态失败: ${error?.message || '未知错误'}` };
   }
 }
 
@@ -473,6 +775,12 @@ export function getFullImageUrl(imageUrl: string): string {
     return imageUrl;
   }
 
+  // 处理base64数据URL
+  if (imageUrl.startsWith('data:')) {
+    console.log('URL是base64数据URL');
+    return imageUrl;
+  }
+
   // 处理uploads路径
   let normalizedUrl = imageUrl;
   
@@ -519,7 +827,7 @@ export async function removeBackground(params: RemoveBackgroundParams): Promise<
     
     try {
       // 尝试从Next.js API路由获取
-      const frontendResponse = await fetch('http://localhost:3000/api/stability/get-api-key');
+      const frontendResponse = await fetch('/api/stability/get-api-key');
       const data = await frontendResponse.json();
       keyResponse = { data };
     } catch (frontendError) {
@@ -601,6 +909,17 @@ export async function removeBackground(params: RemoveBackgroundParams): Promise<
   }
 }
 
+/**
+ * 使用Stability AI v2beta的Core Generate API生成图像
+ */
+export async function generateStableImageDirect(params: GenerateBackgroundParams): Promise<ApiResponse<{imageUrl: string}>> {
+  logger.info('使用Stability AI直接生成图像', { params });
+  return fetchApi<{imageUrl: string}>('/api/stability/v2beta/generate/core', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
 export default {
   generateBackgroundImage,
   checkBackgroundStatus,
@@ -614,4 +933,5 @@ export default {
   avatarComposition,
   replaceBackgroundAndRelight,
   removeBackground,
-}; 
+  generateStableImageDirect,
+};

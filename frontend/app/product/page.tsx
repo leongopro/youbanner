@@ -7,8 +7,10 @@ import {
   type RemoveBackgroundParams,
   generateBackgroundImage,
   checkBackgroundStatus,
-  type BackgroundStatusResponse
+  type BackgroundStatusResponse,
+  generateStableImageDirect
 } from '@/lib/api';
+import { useRouter } from 'next/navigation';
 
 // 补充BackgroundStatusResponse类型定义
 type EnhancedBackgroundStatusResponse = BackgroundStatusResponse & {
@@ -52,6 +54,50 @@ const customStyles = `
   
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #6282ff;
+  }
+  
+  /* 禁用选择和文本高亮 */
+  .no-select {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  
+  /* 防止调整大小时出现蓝色高亮 */
+  *::selection {
+    background-color: transparent;
+  }
+  
+  .resize-handle::selection {
+    background-color: transparent !important;
+  }
+  
+  /* 添加呼吸灯动画 */
+  @keyframes breatheAnimation {
+    0%, 100% {
+      opacity: 0.6;
+      box-shadow: 0 0 5px rgba(72, 104, 225, 0.3);
+    }
+    50% {
+      opacity: 1;
+      box-shadow: 0 0 15px rgba(72, 104, 225, 0.8);
+    }
+  }
+  
+  @keyframes pulseAnimation {
+    0%, 100% {
+      background-color: #4868e1;
+      box-shadow: 0 0 5px rgba(72, 104, 225, 0.3);
+    }
+    50% {
+      background-color: #5a77e6;
+      box-shadow: 0 0 15px rgba(72, 104, 225, 0.8);
+    }
+  }
+  
+  .hover-pulse:hover {
+    animation: pulseAnimation 3s infinite ease-in-out;
   }
   
   .smart-input {
@@ -178,6 +224,8 @@ const customStyles = `
 `;
 
 export default function ProductPage() {
+  const router = useRouter();
+  
   // 移除背景相关状态
   const [removeBgImage, setRemoveBgImage] = useState<string | null>(null);
   const [removeBgResult, setRemoveBgResult] = useState<string | null>(null);
@@ -188,18 +236,19 @@ export default function ProductPage() {
   const [selectedFileName, setSelectedFileName] = useState<string>(''); // 添加文件名状态
 
   // AI背景生成相关状态
-  const [aiBackgroundPrompt, setAiBackgroundPrompt] = useState<string>('');
+  const [aiBackgroundPrompt, setAiBackgroundPrompt] = useState('简约科技YouTube频道背景，深蓝色到紫色渐变，几何图形点缀，高品质4K分辨率，清晰的设计');
+  const [negativePrompt, setNegativePrompt] = useState(''); // 添加否定提示词状态
   const [aiGeneratedBackground, setAiGeneratedBackground] = useState<string | null>(null);
-  const [isGeneratingAiBackground, setIsGeneratingAiBackground] = useState<boolean>(false);
-  const [aiBackgroundStatus, setAiBackgroundStatus] = useState<string>('');
-  const [aiBackgroundJobId, setAiBackgroundJobId] = useState<string | null>(null);
+  const [aiBackgroundStatus, setAiBackgroundStatus] = useState('');
+  const [isGeneratingAiBackground, setIsGeneratingAiBackground] = useState(false);
   const [compositeResult, setCompositeResult] = useState<string | null>(null);
+  const [backgroundImageLoaded, setBackgroundImageLoaded] = useState(false); // 添加图片加载状态
   
   // 添加是否移除背景的切换状态
-  const [shouldRemoveBackground, setShouldRemoveBackground] = useState<boolean>(true);
+  const [shouldRemoveBackground, setShouldRemoveBackground] = useState<boolean>(false); // 修改默认值为false
   
   // 添加位置和大小调整相关状态
-  const [logoPosition, setLogoPosition] = useState({ x: 50, y: 50 }); // 位置（百分比）
+  const [logoPosition, setLogoPosition] = useState({ x: 50, y: 75 }); // 位置（百分比）
   const [logoSize, setLogoSize] = useState({ width: 200, height: 200 }); // 大小（像素）
   const [isDragging, setIsDragging] = useState(false);
   const [originalSize, setOriginalSize] = useState({ width: 200, height: 200 }); // 原始尺寸
@@ -221,71 +270,56 @@ export default function ProductPage() {
   const [fontWeight, setFontWeight] = useState('normal'); // 字体粗细
   const [fontFamily, setFontFamily] = useState('Arial'); // 字体类型
   
-  // 调试日志 - 监控条件变量变化
+  // 添加风格预设状态
+  const [stylePreset, setStylePreset] = useState('');
+  
+  // style preset选项列表
+  const stylePresets = [
+    { value: 'photographic', label: '真实照片风格' },
+    { value: 'digital-art', label: '数字艺术' },
+    { value: 'anime', label: '动漫风格' },
+    { value: 'cinematic', label: '电影效果' },
+    { value: 'comic-book', label: '漫画风格' },
+    { value: 'fantasy-art', label: '幻想艺术' },
+    { value: 'neon-punk', label: '霓虹朋克' },
+    { value: '3d-model', label: '3D模型' },
+    { value: 'analog-film', label: '胶片风格' },
+    { value: 'isometric', label: '等距视图' },
+    { value: 'line-art', label: '线条艺术' },
+    { value: 'low-poly', label: '低多边形' },
+    { value: 'modeling-compound', label: '粘土风格' },
+    { value: 'origami', label: '折纸风格' },
+    { value: 'pixel-art', label: '像素艺术' },
+    { value: 'tile-texture', label: '瓷砖纹理' }
+  ];
+  
+  // 添加种子值状态
+  const [seedValue, setSeedValue] = useState<number>(0);
+  const [showSeedOption, setShowSeedOption] = useState<boolean>(false);
+  
+  // 修改状态监控，合并所有useEffect为一个
   useEffect(() => {
     console.log('状态变化:', {
       aiGeneratedBackground: !!aiGeneratedBackground,
       removeBgImage: !!removeBgImage,
       removeBgResult: !!removeBgResult,
       shouldRemoveBackground,
-      条件满足: !!(aiGeneratedBackground && (shouldRemoveBackground ? removeBgResult : removeBgImage))
-    });
-  }, [aiGeneratedBackground, removeBgImage, removeBgResult, shouldRemoveBackground]);
-  
-  // 监控AI背景生成状态
-  useEffect(() => {
-    if (!aiBackgroundJobId || !isGeneratingAiBackground) return;
-    
-    const checkInterval = setInterval(async () => {
-      try {
-        const response = await checkBackgroundStatus(aiBackgroundJobId);
-        
-        if (response.error) {
-          setAiBackgroundStatus(`检查状态错误: ${response.error}`);
-          setIsGeneratingAiBackground(false);
-          clearInterval(checkInterval);
-          return;
-        }
-        
-        // 检查是否完成
-        if (response.data?.status === 'completed') {
-          let resultUrl = null;
-          
-          if (response.data.result?.imageUrl) {
-            resultUrl = response.data.result.imageUrl;
-          } else if (typeof response.data.result === 'string') {
-            resultUrl = response.data.result;
-          } else if (response.data.hasOwnProperty('imageUrl')) {
-            resultUrl = (response.data as any).imageUrl;
-          }
-          
-          if (resultUrl) {
-            setAiGeneratedBackground(resultUrl);
-            setAiBackgroundStatus('背景生成完成');
-          } else {
-            setAiBackgroundStatus('背景生成完成但找不到图像URL');
-          }
-          
-          setIsGeneratingAiBackground(false);
-          clearInterval(checkInterval);
-        } else if (response.data?.status === 'failed') {
-          setAiBackgroundStatus(`处理失败: ${response.data.error || '未知错误'}`);
-          setIsGeneratingAiBackground(false);
-          clearInterval(checkInterval);
-        } else {
-          // 更新处理状态
-          const enhancedData = response.data as EnhancedBackgroundStatusResponse;
-          let statusMessage = enhancedData?.message || enhancedData?.status || '等待中';
-          setAiBackgroundStatus(statusMessage);
-        }
-      } catch (error) {
-        console.error('检查背景生成状态时出错:', error);
-        setAiBackgroundStatus('检查状态时出错');
+      isGeneratingAiBackground,
+      isRemovingBg,
+      条件: {
+        showInitialPreview: shouldShowInitialPreview(),
+        showBackgroundPreview: shouldShowBackgroundPreview(),
+        showFullPreview: shouldShowFullPreview()
       }
-    }, 2000);
-    
-    return () => clearInterval(checkInterval);
-  }, [aiBackgroundJobId, isGeneratingAiBackground]);
+    });
+  }, [
+    aiGeneratedBackground, 
+    removeBgImage, 
+    removeBgResult, 
+    shouldRemoveBackground,
+    isGeneratingAiBackground,
+    isRemovingBg
+  ]);
   
   // 上传图片处理函数
   const handleRemoveBgUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -309,9 +343,11 @@ export default function ProductPage() {
         if (data.imageUrl) {
           setRemoveBgImage(data.imageUrl);
           console.log('图片上传成功，设置removeBgImage:', data.imageUrl);
+          // 不再重置位置到中央
         } else if (data.fileUrl) {
           setRemoveBgImage(data.fileUrl);
           console.log('图片上传成功，设置removeBgImage:', data.fileUrl);
+          // 不再重置位置到中央
         } else {
           console.error('上传响应没有包含imageUrl或fileUrl:', uploadResponse);
           alert('上传成功但没有返回图像URL');
@@ -331,7 +367,7 @@ export default function ProductPage() {
     
     try {
       setIsRemovingBg(true);
-      setRemoveBgStatus('正在移除背景...');
+      setRemoveBgStatus('');
       
       // 调用移除背景API
       const params: RemoveBackgroundParams = {
@@ -344,7 +380,7 @@ export default function ProductPage() {
       const response = await removeBackground(params);
       
       if (response.error) {
-        setRemoveBgStatus(`移除背景错误: ${response.error}`);
+        setRemoveBgStatus(`头像处理错误: ${response.error}`);
         setIsRemovingBg(false);
         return;
       }
@@ -352,25 +388,416 @@ export default function ProductPage() {
       if (response.data && response.data.imageUrl) {
         setRemoveBgResult(response.data.imageUrl);
         console.log('背景移除成功，结果URL:', response.data.imageUrl);
-        setRemoveBgStatus('背景移除完成');
+        setRemoveBgStatus('');
         
-        // 背景移除成功后重置为100%缩放
-        if (originalSize.width > 0 && originalSize.height > 0) {
-          const newWidth = originalSize.width;
-          const newHeight = originalSize.height;
-          setLogoSize({ width: newWidth, height: newHeight });
-          setLogoScale(100);
-          console.log('背景移除后重置缩放为100%');
+        // 设置固定的默认大小
+        // 保存原始尺寸信息用于缩放
+        if (originalSize.width === 0 || originalSize.height === 0) {
+          // 如果没有原始尺寸信息，创建一个临时Image对象获取
+          const img = new Image();
+          img.onload = () => {
+            setOriginalSize({
+              width: img.width,
+              height: img.height
+            });
+            
+            // 计算为原始尺寸的25%
+            const targetWidth = img.width * 0.25;
+            const targetHeight = img.height * 0.25;
+            
+            setLogoSize({ width: targetWidth, height: targetHeight });
+            setLogoScale(25); // 设置为25%缩放比例
+            
+            // 不再设置固定的左上角位置
+          };
+          img.src = response.data.imageUrl;
+        } else {
+          // 计算为原始尺寸的25%
+          const targetWidth = originalSize.width * 0.25;
+          const targetHeight = originalSize.height * 0.25;
+          
+          setLogoSize({ width: targetWidth, height: targetHeight });
+          setLogoScale(25); // 设置为25%缩放比例
+          
+          // 不再设置固定的左上角位置
         }
       } else {
         console.error('移除背景响应没有包含imageUrl:', response);
-        setRemoveBgStatus('移除背景完成但没有返回图像URL');
+        setRemoveBgStatus('头像处理完成但没有返回图像URL');
       }
     } catch (error) {
       console.error('移除背景时出错:', error);
-      setRemoveBgStatus('移除背景时发生错误');
+      setRemoveBgStatus('头像处理时发生错误');
     } finally {
       setIsRemovingBg(false);
+    }
+  };
+  
+  // 辅助函数：调试并提取API响应中的图像URL
+  const debugResponseUrl = (data: any): string | null => {
+    console.log('=== 调试后端API响应中的图像路径 ===');
+    
+    // 如果data本身就是字符串，可能是URL或Base64
+    if (typeof data === 'string') {
+      console.log('响应数据是字符串:', data.substring(0, 100) + '...');
+      
+      // 检查是否是Base64图像
+      if (data.startsWith('data:image/')) {
+        console.log('找到Base64编码图像');
+        return data;
+      }
+      
+      // 检查是否是URL
+      if (data.startsWith('http') || data.startsWith('/')) {
+        console.log('找到直接URL:', data);
+        return data;
+      }
+      
+      // 可能是其他格式的字符串，尝试处理
+      try {
+        const parsedData = JSON.parse(data);
+        return debugResponseUrl(parsedData);
+      } catch (e) {
+        // 不是JSON字符串，继续其他检查
+      }
+    }
+    
+    // 如果响应为空或无效，跳过
+    if (!data || typeof data !== 'object') {
+      console.log('响应数据为空或非对象');
+      return null;
+    }
+    
+    // 检查是否直接返回了base64图像数据
+    if (data.base64 || data.base64_image) {
+      const base64Data = data.base64 || data.base64_image;
+      console.log('找到base64图像数据');
+      
+      // 确保有正确的前缀
+      const prefix = 'data:image/png;base64,';
+      const imageData = base64Data.startsWith(prefix) ? base64Data : prefix + base64Data;
+      return imageData;
+    }
+    
+    // 检查result.imageUrl
+    if (data?.result?.imageUrl) {
+      console.log('找到data.result.imageUrl路径:', data.result.imageUrl);
+      return data.result.imageUrl;
+    }
+    
+    // 检查artifacts数组 (Stable Diffusion API通常使用这种格式)
+    if (data.artifacts && Array.isArray(data.artifacts) && data.artifacts.length > 0) {
+      // 通常，第一个artifact包含生成的图像
+      const artifact = data.artifacts[0];
+      
+      if (artifact.base64) {
+        console.log('找到artifact中的base64数据');
+        return 'data:image/png;base64,' + artifact.base64;
+      }
+      
+      if (artifact.image) {
+        console.log('找到artifact中的image数据');
+        return 'data:image/png;base64,' + artifact.image;
+      }
+      
+      if (artifact.url) {
+        console.log('找到artifact中的url:', artifact.url);
+        return artifact.url;
+      }
+    }
+    
+    // 检查直接的imageUrl
+    if ('imageUrl' in data) {
+      console.log('找到data.imageUrl路径:', data.imageUrl);
+      return data.imageUrl;
+    }
+    
+    // 检查data.image字段 (有些API使用这种格式)
+    if (data.image) {
+      if (typeof data.image === 'string') {
+        console.log('找到data.image字符串:', data.image.substring(0, 30) + '...');
+        
+        // 可能是base64或URL
+        if (data.image.startsWith('data:') || data.image.startsWith('http') || data.image.startsWith('/')) {
+          return data.image;
+        } else {
+          // 假设是未添加前缀的base64
+          return 'data:image/png;base64,' + data.image;
+        }
+      } else if (typeof data.image === 'object' && data.image !== null) {
+        console.log('data.image是对象:', data.image);
+        
+        // 检查常见的嵌套结构
+        if (data.image.url) {
+          console.log('找到data.image.url:', data.image.url);
+          return data.image.url;
+        }
+        
+        if (data.image.src) {
+          console.log('找到data.image.src:', data.image.src);
+          return data.image.src;
+        }
+        
+        if (data.image.base64 || data.image.data) {
+          const base64Data = data.image.base64 || data.image.data;
+          console.log('找到image对象中的base64数据');
+          return 'data:image/png;base64,' + base64Data;
+        }
+      }
+    }
+    
+    // 检查data.output或data.outputs字段
+    ['output', 'outputs'].forEach(key => {
+      if (data[key]) {
+        console.log(`检查${key}字段:`, data[key]);
+        
+        // 如果是数组，检查第一个元素
+        if (Array.isArray(data[key]) && data[key].length > 0) {
+          const firstItem = data[key][0];
+          
+          // 如果是字符串，可能是URL或base64
+          if (typeof firstItem === 'string') {
+            console.log(`${key}[0]是字符串:`, firstItem.substring(0, 30) + '...');
+            
+            if (firstItem.startsWith('data:') || firstItem.startsWith('http') || firstItem.startsWith('/')) {
+              return firstItem;
+            } else if (firstItem.length > 100) { // 可能是base64
+              return 'data:image/png;base64,' + firstItem;
+            }
+          } 
+          // 如果是对象，寻找常见字段
+          else if (typeof firstItem === 'object' && firstItem !== null) {
+            console.log(`${key}[0]是对象:`, Object.keys(firstItem));
+            
+            // 检查常见字段
+            for (const field of ['image', 'url', 'src', 'imageUrl', 'base64']) {
+              if (field in firstItem && firstItem[field]) {
+                console.log(`找到${key}[0].${field}:`, 
+                  typeof firstItem[field] === 'string' ? 
+                    firstItem[field].substring(0, 30) + '...' : firstItem[field]);
+                
+                if (typeof firstItem[field] === 'string') {
+                  if (field === 'base64' || (firstItem[field].length > 100 && !firstItem[field].startsWith('http'))) {
+                    return 'data:image/png;base64,' + firstItem[field];
+                  }
+                  return firstItem[field];
+                }
+              }
+            }
+          }
+        } 
+        // 如果不是数组而是对象
+        else if (typeof data[key] === 'object' && data[key] !== null) {
+          console.log(`${key}是对象:`, Object.keys(data[key]));
+          
+          // 检查常见字段
+          for (const field of ['image', 'url', 'src', 'imageUrl', 'base64']) {
+            if (field in data[key] && data[key][field]) {
+              console.log(`找到${key}.${field}:`, 
+                typeof data[key][field] === 'string' ? 
+                  data[key][field].substring(0, 30) + '...' : data[key][field]);
+              
+              if (typeof data[key][field] === 'string') {
+                if (field === 'base64' || (data[key][field].length > 100 && !data[key][field].startsWith('http'))) {
+                  return 'data:image/png;base64,' + data[key][field];
+                }
+                return data[key][field];
+              }
+            }
+          }
+        }
+      }
+    });
+    
+    // 深度搜索所有字段
+    const findImageUrl = (obj: any, path = ''): string | null => {
+      // 辅助函数：判断字符串是否可能是图像URL
+      const isLikelyImageUrl = (str: string): boolean => {
+        // 常见图像扩展名
+        const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.tiff', '.avif', '.heic'];
+        
+        // 检查是否以这些扩展名结尾
+        const hasImageExtension = imageExtensions.some(ext => 
+          str.toLowerCase().endsWith(ext)
+        );
+        
+        // 检查是否是常见的URL模式
+        const isUrlPattern = 
+          str.startsWith('http') || 
+          str.startsWith('https') || 
+          str.startsWith('/') || 
+          str.startsWith('./') ||
+          str.includes('/uploads/') || 
+          str.includes('/generated/') ||
+          str.includes('/images/') ||
+          str.includes('/img/') ||
+          str.includes('/assets/') ||
+          str.includes('/static/') ||
+          str.includes('/media/');
+        
+        // 检查是否是base64编码的图像
+        const isBase64Image = 
+          str.startsWith('data:image/') || 
+          (/^[A-Za-z0-9+/=]+$/.test(str) && str.length > 100);
+        
+        return hasImageExtension || isUrlPattern || isBase64Image;
+      };
+      
+      // 如果是null或undefined或不是对象，返回null
+      if (!obj || typeof obj !== 'object') return null;
+      
+      // 处理数组
+      if (Array.isArray(obj)) {
+        for (let i = 0; i < obj.length; i++) {
+          const currentPath = path ? `${path}[${i}]` : `[${i}]`;
+          
+          // 如果是字符串，检查是否是URL
+          if (typeof obj[i] === 'string') {
+            if (isLikelyImageUrl(obj[i])) {
+              console.log(`找到数组中的图像URL: ${currentPath} = ${obj[i]}`);
+              return obj[i].startsWith('data:image/') ? obj[i] : 
+                     (/^[A-Za-z0-9+/=]+$/.test(obj[i]) && obj[i].length > 100 && !obj[i].startsWith('http')) ? 
+                     'data:image/png;base64,' + obj[i] : obj[i];
+            }
+          } 
+          // 递归检查数组元素
+          else if (typeof obj[i] === 'object' && obj[i] !== null) {
+            const result = findImageUrl(obj[i], currentPath);
+            if (result) return result;
+          }
+        }
+        return null;
+      }
+      
+      // 已知可能包含图像URL的字段名
+      const knownImageFields = [
+        'url', 'imageUrl', 'image_url', 'imgUrl', 'img_url', 
+        'src', 'source', 'href', 'link',
+        'image', 'img', 'picture', 'photo', 'thumbnail',
+        'base64', 'base64_image', 'data', 'content'
+      ];
+      
+      // 首先检查已知的字段名
+      for (const key of knownImageFields) {
+        if (key in obj && obj[key]) {
+          const currentPath = path ? `${path}.${key}` : key;
+          
+          // 字符串类型直接检查
+          if (typeof obj[key] === 'string') {
+            const value = obj[key];
+            
+            if (isLikelyImageUrl(value)) {
+              console.log(`找到已知字段的图像URL: ${currentPath} = ${value.substring(0, 30)}...`);
+              
+              // 如果是base64编码但没有前缀，添加前缀
+              if (/^[A-Za-z0-9+/=]+$/.test(value) && value.length > 100 && !value.startsWith('data:image/') && !value.startsWith('http')) {
+                return 'data:image/png;base64,' + value;
+              }
+              
+              return value;
+            }
+          } 
+          // 如果是对象，递归检查
+          else if (typeof obj[key] === 'object' && obj[key] !== null) {
+            const result = findImageUrl(obj[key], currentPath);
+            if (result) return result;
+          }
+        }
+      }
+      
+      // 检查所有其他字段
+      for (const key in obj) {
+        // 已检查过的已知字段跳过
+        if (knownImageFields.includes(key)) continue;
+        
+        const currentPath = path ? `${path}.${key}` : key;
+        
+        // 检查字符串值
+        if (typeof obj[key] === 'string') {
+          const value = obj[key];
+          
+          // 字段名包含图像相关关键词
+          const isImageRelatedField = 
+            key.toLowerCase().includes('image') ||
+            key.toLowerCase().includes('img') ||
+            key.toLowerCase().includes('picture') ||
+            key.toLowerCase().includes('photo') ||
+            key.toLowerCase().includes('thumbnail') ||
+            key.toLowerCase().includes('url') ||
+            key.toLowerCase().includes('src') ||
+            key.toLowerCase().includes('link') ||
+            key.toLowerCase().includes('path');
+          
+          if (isImageRelatedField && isLikelyImageUrl(value)) {
+            console.log(`找到字段名相关的图像URL: ${currentPath} = ${value.substring(0, 30)}...`);
+            
+            // 处理base64编码
+            if (/^[A-Za-z0-9+/=]+$/.test(value) && value.length > 100 && !value.startsWith('data:image/') && !value.startsWith('http')) {
+              return 'data:image/png;base64,' + value;
+            }
+            
+            return value;
+          }
+          
+          // 即使字段名不相关，但值看起来像图像URL
+          if (isLikelyImageUrl(value)) {
+            console.log(`找到可能的图像URL: ${currentPath} = ${value.substring(0, 30)}...`);
+            
+            // 处理base64编码
+            if (/^[A-Za-z0-9+/=]+$/.test(value) && value.length > 100 && !value.startsWith('data:image/') && !value.startsWith('http')) {
+              return 'data:image/png;base64,' + value;
+            }
+            
+            return value;
+          }
+        } 
+        // 递归检查嵌套对象
+        else if (typeof obj[key] === 'object' && obj[key] !== null) {
+          const result = findImageUrl(obj[key], currentPath);
+          if (result) return result;
+        }
+      }
+      
+      return null;
+    };
+    
+    // 尝试深度搜索
+    const foundUrl = findImageUrl(data);
+    if (foundUrl) {
+      console.log('通过深度搜索找到URL:', foundUrl);
+      return foundUrl;
+    }
+    
+    console.log('未找到任何URL路径');
+    console.log('完整响应数据:', JSON.stringify(data));
+    return null;
+  };
+  
+  // 添加谷歌翻译函数
+  const translateWithGoogle = async (text: string): Promise<string> => {
+    try {
+      // 使用Google翻译API（不需要API密钥的简单实现）
+      const encodedText = encodeURIComponent(text);
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=zh-CN&tl=en&dt=t&q=${encodedText}`;
+      
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        // Google翻译API返回格式为嵌套数组
+        if (data && data[0] && Array.isArray(data[0])) {
+          // 提取翻译结果并合并
+          const translatedText = data[0]
+            .filter((item: any) => item && item[0])
+            .map((item: any) => item[0])
+            .join(' ');
+          
+          return translatedText;
+        }
+      }
+      throw new Error('Google翻译API返回无效数据');
+    } catch (error) {
+      console.error('Google翻译失败:', error);
+      throw error;
     }
   };
   
@@ -379,38 +806,480 @@ export default function ProductPage() {
     if (!aiBackgroundPrompt) return;
     
     try {
+      console.log("开始生成背景，风格预设:", stylePreset, "种子值:", seedValue);
       setIsGeneratingAiBackground(true);
       setAiBackgroundStatus('开始生成背景...');
-      setAiGeneratedBackground(null);
       
-      // 调用生成背景API
-      console.log('调用生成背景API，提示词:', aiBackgroundPrompt);
-      const response = await generateBackgroundImage({
-        prompt: aiBackgroundPrompt
+      // 添加翻译步骤
+      setAiBackgroundStatus('正在翻译提示词...');
+      
+      // 检查提示词是否含有中文字符
+      const containsChinese = /[\u4e00-\u9fa5]/.test(aiBackgroundPrompt) || /[\u4e00-\u9fa5]/.test(negativePrompt);
+      let translatedPrompt = aiBackgroundPrompt;
+      let translatedNegativePrompt = negativePrompt;
+      
+      if (containsChinese) {
+        try {
+          // 首先尝试使用Libre Translate API进行翻译
+          try {
+            // 将正面提示词和否定提示词合并为一个请求，用特殊标记分隔
+            const textToTranslate = negativePrompt 
+              ? `${aiBackgroundPrompt}|||NEGATIVE|||${negativePrompt}` 
+              : aiBackgroundPrompt;
+            
+            const response = await fetch('https://libretranslate.de/translate', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                q: textToTranslate,
+                source: 'zh',
+                target: 'en',
+                format: 'text'
+              }),
+              // 设置较短的超时时间，以便在服务不可用时快速切换到备用方案
+              signal: AbortSignal.timeout(5000)
+            });
+            
+            if (response.ok) {
+              const result = await response.json();
+              if (result.translatedText) {
+                // 分离翻译后的正面提示词和否定提示词
+                const translatedParts = result.translatedText.split('|||NEGATIVE|||');
+                translatedPrompt = translatedParts[0].trim();
+                if (translatedParts.length > 1) {
+                  translatedNegativePrompt = translatedParts[1].trim();
+                }
+                
+                console.log("LibreTranslate翻译结果:", {
+                  prompt: translatedPrompt,
+                  negativePrompt: translatedNegativePrompt
+                });
+                setAiBackgroundStatus('提示词翻译完成，开始生成图像...');
+              } else {
+                throw new Error("翻译API返回了无效结果");
+              }
+            } else {
+              throw new Error(`翻译请求失败，状态码: ${response.status}`);
+            }
+          } catch (libreTranslateError) {
+            // 如果Libre Translate失败，尝试使用Google翻译API
+            console.warn("LibreTranslate失败，切换到Google翻译:", libreTranslateError);
+            setAiBackgroundStatus('第一翻译服务失败，使用备用翻译...');
+            
+            try {
+              // 翻译正面提示词
+              translatedPrompt = await translateWithGoogle(aiBackgroundPrompt);
+              
+              // 如果有否定提示词，也翻译它
+              if (negativePrompt) {
+                translatedNegativePrompt = await translateWithGoogle(negativePrompt);
+              }
+              
+              console.log("Google翻译结果:", {
+                prompt: translatedPrompt,
+                negativePrompt: translatedNegativePrompt
+              });
+              setAiBackgroundStatus('备用翻译完成，开始生成图像...');
+            } catch (googleTranslateError) {
+              console.error("Google翻译也失败:", googleTranslateError);
+              setAiBackgroundStatus('所有翻译服务均失败，使用原始提示词...');
+            }
+          }
+        } catch (translationError) {
+          console.error("翻译过程中出错:", translationError);
+          setAiBackgroundStatus('翻译出错，使用原始提示词...');
+        }
+      } else {
+        console.log("提示词不含中文，无需翻译");
+      }
+      
+      // 调用生成背景API - 使用Stable Image Core API
+      console.log("准备发送请求，参数:", {
+        prompt: translatedPrompt, // 使用翻译后的提示词
+        original_prompt: aiBackgroundPrompt, // 保留原始提示词用于记录
+        negativePrompt: translatedNegativePrompt, // 使用翻译后的否定提示词
+        style_preset: stylePreset,
+        output_format: 'webp',
+        seed: seedValue > 0 ? seedValue : undefined
       });
       
+      // 声明response变量在try块外，以便catch块和try块之后的代码都能访问
+      let response;
+      
+      try {
+        response = await generateBackgroundImage({
+          prompt: translatedPrompt, // 使用翻译后的提示词
+          negativePrompt: translatedNegativePrompt, // 使用翻译后的否定提示词
+          style_preset: stylePreset,
+          output_format: 'webp',
+          seed: seedValue > 0 ? seedValue : undefined // 只有当种子值大于0时才发送
+        });
+        
+        // 完整打印响应
+        console.log("=========== 完整API响应 ===========");
+        console.log("响应类型:", typeof response);
+        console.log("响应键:", Object.keys(response));
+        
+        // 使用类型断言访问可能存在的额外属性
+        const responseAny = response as any;
+        if (responseAny.status) {
+          console.log("响应状态:", responseAny.status);
+        }
+        
+        if (responseAny.statusText) {
+          console.log("响应状态文本:", responseAny.statusText);
+        }
+        if (responseAny.headers) {
+          console.log("响应头:", responseAny.headers);
+          if (responseAny.headers['content-type']) {
+            console.log("内容类型:", responseAny.headers['content-type']);
+          }
+        }
+        
+        if (response.data) {
+          const dataType = typeof response.data;
+          console.log("数据类型:", dataType);
+          
+          if (dataType === 'string') {
+            const dataStr = response.data as unknown as string;
+            console.log("字符串数据前100字符:", dataStr.substring(0, 100));
+          } else if (dataType === 'object') {
+            // 安全输出对象
+            try {
+              const jsonStr = JSON.stringify(response.data).substring(0, 1000);
+              console.log("对象数据前1000字符:", jsonStr);
+            } catch(e) {
+              console.log("无法序列化的对象数据");
+            }
+          } else if (ArrayBuffer.isView(response.data)) {
+            console.log("二进制数据长度:", (response.data as any).byteLength);
+          }
+        }
+      } catch (error) {
+        console.error('生成背景时出错:', error);
+        setAiBackgroundStatus('生成背景时发生错误，请检查控制台');
+        setIsGeneratingAiBackground(false);
+        return;
+      }
+      
+      // 确保response已定义
+      if (!response) {
+        setAiBackgroundStatus('获取响应失败');
+        setIsGeneratingAiBackground(false);
+        return;
+      }
+      
+      // 检查响应是否成功
       if (response.error) {
+        console.error("生成背景错误:", response.error);
         setAiBackgroundStatus(`生成背景错误: ${response.error}`);
         setIsGeneratingAiBackground(false);
         return;
       }
       
-      // 处理响应中的任务ID
-      if (response.data && (response.data.jobId || response.data.id)) {
-        const jobId = response.data.jobId || response.data.id || '';
-        setAiBackgroundJobId(jobId);
-        console.log('生成背景任务已创建，任务ID:', jobId);
-        setAiBackgroundStatus('正在生成背景...');
+      // 首先检查是否有直接返回的imageUrl (新版直接调用Stability API的响应格式)
+      if (response.data && 'imageUrl' in (response.data as any)) {
+        console.log("检测到直接返回的imageUrl");
+        const imageUrl = (response.data as any).imageUrl;
+        setAiGeneratedBackground(imageUrl);
+        setAiBackgroundStatus('背景生成完成');
+        setIsGeneratingAiBackground(false);
+        return;
+      }
+      
+      // 处理直接标记的响应
+      if (response.data && 'direct' in (response.data as any) && (response.data as any).direct === true) {
+        console.log("检测到直接API调用的响应");
+        if ('imageUrl' in (response.data as any)) {
+          const imageUrl = (response.data as any).imageUrl;
+          console.log("使用直接返回的imageUrl:", typeof imageUrl, imageUrl.substring(0, 50) + "...");
+          setAiGeneratedBackground(imageUrl);
+          setAiBackgroundStatus('背景生成完成');
+          setIsGeneratingAiBackground(false);
+          return;
+        }
+      }
+      
+      // 检查是否直接收到了二进制图像数据 (当Accept: "image/*"时)
+      if (response.data && 
+          'headers' in response && 
+          response.headers && 
+          typeof response.headers === 'object' &&
+          'content-type' in response.headers &&
+          typeof response.headers['content-type'] === 'string' &&
+          response.headers['content-type'].startsWith('image/')) {
+        
+        console.log("收到了直接图像响应，内容类型:", response.headers['content-type']);
+        
+        // 创建Blob URL
+        const blob = new Blob([response.data as unknown as BlobPart], { type: response.headers['content-type'] });
+        const imageUrl = URL.createObjectURL(blob);
+        
+        console.log("创建了Blob URL:", imageUrl);
+        setAiGeneratedBackground(imageUrl);
+        setAiBackgroundStatus('背景生成完成');
+        setIsGeneratingAiBackground(false);
+        return;
+      }
+      
+      // 如果响应是JSON格式 (当Accept: "application/json"时)
+      if (response.data) {
+        console.log("响应数据类型:", typeof response.data);
+        
+        // 打印完整的响应数据结构
+        if (typeof response.data === 'object') {
+          console.log("响应数据完整结构:", JSON.stringify(response.data));
+        }
+        
+        // 尝试从响应中提取图像URL或base64数据
+        const imageUrl = debugResponseUrl(response.data);
+        
+        if (imageUrl) {
+          console.log("成功找到并使用图像URL:", imageUrl);
+          console.log("实际设置aiGeneratedBackground的值:", imageUrl);
+          setAiGeneratedBackground(imageUrl);
+          setAiBackgroundStatus('背景生成完成');
+          setIsGeneratingAiBackground(false);
+          return;
+        } else {
+          console.warn("debugResponseUrl未能找到图像URL，尝试其他方法提取...");
+          
+          // 手动浅层检查一些可能的位置（覆盖一些可能未被debugResponseUrl检测到的路径）
+          let foundUrl = null;
+          
+          // 使用any类型断言来避免TypeScript类型检查错误
+          const anyData = response.data as any;
+          
+          if (anyData.url) {
+            foundUrl = anyData.url;
+            console.log("找到顶层url:", foundUrl);
+          } else if (anyData.image) {
+            foundUrl = anyData.image;
+            console.log("找到顶层image:", foundUrl);
+          } else if (anyData.data && anyData.data.url) {
+            foundUrl = anyData.data.url;
+            console.log("找到data.url:", foundUrl);
+          } else if (anyData.data && anyData.data.image) {
+            foundUrl = anyData.data.image;
+            console.log("找到data.image:", foundUrl);
+          } else if (anyData.result && anyData.result.image) {
+            foundUrl = anyData.result.image;
+            console.log("找到result.image:", foundUrl);
+          } else if (anyData.output) {
+            if (typeof anyData.output === 'string') {
+              foundUrl = anyData.output;
+              console.log("找到output字符串:", foundUrl);
+            } else if (Array.isArray(anyData.output) && anyData.output.length > 0) {
+              foundUrl = anyData.output[0];
+              console.log("找到output数组首项:", foundUrl);
+            }
+          }
+          
+          if (foundUrl) {
+            if (typeof foundUrl === 'string') {
+              if (foundUrl.startsWith('data:image/')) {
+                console.log("找到base64图像数据");
+                setAiGeneratedBackground(foundUrl);
+              } else if (foundUrl.startsWith('http') || foundUrl.startsWith('/')) {
+                console.log("找到URL:", foundUrl);
+                setAiGeneratedBackground(foundUrl);
+              } else if (foundUrl.length > 100 && /^[A-Za-z0-9+/=]+$/.test(foundUrl.substring(0, 100))) {
+                console.log("找到可能的base64数据");
+                setAiGeneratedBackground('data:image/png;base64,' + foundUrl);
+              } else {
+                console.log("找到未知格式字符串:", foundUrl.substring(0, 30));
+                setAiGeneratedBackground(foundUrl);
+              }
+              setAiBackgroundStatus('背景生成完成');
+              setIsGeneratingAiBackground(false);
+              return;
+            }
+          }
+          
+          // 如果上面仍未找到有效的URL，尝试解析JobId，可能API使用异步处理
+          if (anyData.jobId || anyData.id) {
+            const jobId = anyData.jobId || anyData.id;
+            console.log("找到jobId，将使用异步处理:", jobId);
+            
+            // 设置一个加载中的状态图像
+            setAiGeneratedBackground('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+            setAiBackgroundStatus('已提交请求，等待处理...');
+            
+            // 这里可以添加异步检查jobId的逻辑
+          } else {
+            console.error("无法从响应中提取图像URL或jobId，响应数据:", anyData);
+            setAiGeneratedBackground('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+            setAiBackgroundStatus('无法从响应中提取图像URL');
+            setIsGeneratingAiBackground(false);
+          }
+        }
+        
+        // 如果响应直接是字符串（可能是base64）
+        if (typeof response.data === 'string') {
+          const dataStr = response.data as unknown as string;
+          if (dataStr.startsWith('data:image/')) {
+            console.log("响应是base64图像数据");
+            setAiGeneratedBackground(dataStr);
+            setAiBackgroundStatus('背景生成完成');
+            setIsGeneratingAiBackground(false);
+            return;
+          }
+          
+          // 如果是长字符串且看起来像base64编码
+          if (dataStr.length > 100 && /^[A-Za-z0-9+/=]+$/.test(dataStr.substring(0, 100))) {
+            console.log("响应可能是未格式化的base64数据");
+            const formattedData = `data:image/png;base64,${dataStr}`;
+            setAiGeneratedBackground(formattedData);
+            setAiBackgroundStatus('背景生成完成');
+            setIsGeneratingAiBackground(false);
+            return;
+          }
+        }
+      }
+      
+      // 如果这里仍然存在老的逻辑检查jobId的代码，保留它作为后备
+      if (response.data && 'jobId' in response.data) {
+        const jobId = response.data.jobId;
+        console.log("响应中包含jobId:", jobId);
+        
+        if (!jobId) {
+          setAiBackgroundStatus('无法获取作业ID');
+          setIsGeneratingAiBackground(false);
+          return;
+        }
+        
+        // 获取图像结果
+        const statusResponse = await checkBackgroundStatus(jobId);
+        console.log("状态检查响应:", JSON.stringify(statusResponse));
+        
+        if (statusResponse.error) {
+          console.error("检查状态错误:", statusResponse.error);
+          setAiBackgroundStatus(`检查状态错误: ${statusResponse.error}`);
+          setIsGeneratingAiBackground(false);
+          return;
+        }
+        
+        // 将响应设置为UI状态，以便在界面中查看
+        setAiBackgroundStatus(`正在解析响应数据...`);
+        
+        // 尝试直接输出原始响应，便于调试
+        console.log("=============== 原始响应数据 ===============");
+        console.log("响应类型:", typeof statusResponse);
+        
+        try {
+          // 遍历响应的所有层级并打印
+          const printAllLevels = (obj: any, prefix = '') => {
+            if (obj && typeof obj === 'object') {
+              Object.entries(obj).forEach(([key, value]) => {
+                const path = prefix ? `${prefix}.${key}` : key;
+                
+                if (value && typeof value === 'object') {
+                  console.log(`${path}:`, value);
+                  
+                  // 如果是数组，打印前3个元素
+                  if (Array.isArray(value)) {
+                    for (let i = 0; i < Math.min(value.length, 3); i++) {
+                      console.log(`${path}[${i}]:`, value[i]);
+                    }
+                  } else {
+                    printAllLevels(value, path);
+                  }
+                } else if (typeof value === 'string') {
+                  // 如果字符串很长（可能是base64），只显示前50个字符
+                  const displayValue = value.length > 50 ? value.substring(0, 50) + '...' : value;
+                  console.log(`${path}:`, displayValue);
+                } else {
+                  console.log(`${path}:`, value);
+                }
+              });
+            }
+          };
+          
+          printAllLevels(statusResponse);
+        } catch (e) {
+          console.error("打印响应时出错:", e);
+        }
+        console.log("============================================");
+        
+        // 打印状态响应的详细内容
+        console.log("状态响应数据完整结构:", JSON.stringify(statusResponse.data));
+        
+        // 添加更详细的调试输出
+        console.log("状态响应的原始结构:");
+        if (statusResponse.data) {
+          const data = statusResponse.data as any; // 使用any类型让TypeScript接受以下访问
+          console.log("状态响应类型:", typeof data);
+          console.log("状态响应顶级键:", Object.keys(data));
+          
+          // 检查是否有artifacts数组
+          if (data.artifacts) {
+            console.log("Found artifacts array:", data.artifacts);
+            if (Array.isArray(data.artifacts) && data.artifacts.length > 0) {
+              console.log("First artifact keys:", Object.keys(data.artifacts[0]));
+            }
+          }
+          
+          // 检查是否有result对象
+          if (data.result) {
+            console.log("Found result object:", data.result);
+            console.log("Result keys:", Object.keys(data.result));
+          }
+          
+          // 检查其他可能包含图像的字段
+          ['image', 'imageUrl', 'url', 'images', 'output', 'outputs', 'data'].forEach(key => {
+            if (key in data) {
+              console.log(`Found ${key}:`, data[key]);
+            }
+          });
+        }
+        
+        // 直接调试检查状态响应中的图像URL
+        if (statusResponse.data) {
+          // 使用上面定义的辅助函数分析URL
+          const imageUrl = debugResponseUrl(statusResponse.data);
+          
+          if (imageUrl) {
+            console.log("成功找到并使用图像URL:", imageUrl);
+            setAiGeneratedBackground(imageUrl);
+            setAiBackgroundStatus('背景生成完成');
+            setIsGeneratingAiBackground(false);
+            return;
+          }
+          
+          // 没有找到任何图像URL - 不再使用测试图片
+          console.warn("在响应中未找到任何图像URL:", statusResponse);
+          setAiBackgroundStatus('未能获取生成的图像URL，请重试');
+          setIsGeneratingAiBackground(false);
+        } else {
+          console.warn("状态响应中没有数据:", statusResponse);
+          setAiBackgroundStatus('状态响应中没有数据，请重试');
+          setIsGeneratingAiBackground(false);
+        }
       } else {
-        console.error('生成背景响应没有包含jobId:', response);
-        setAiBackgroundStatus('生成背景响应格式错误');
+        console.error("响应格式无法识别:", response);
+        setAiBackgroundStatus('响应格式无法识别，请重试');
         setIsGeneratingAiBackground(false);
       }
-    } catch (error) {
-      console.error('生成背景时出错:', error);
-      setAiBackgroundStatus('生成背景时发生错误');
+    } catch (outerError) {
+      console.error("生成背景过程中发生未捕获错误:", outerError);
+      setAiBackgroundStatus('生成背景过程中发生错误，请重试');
       setIsGeneratingAiBackground(false);
+      
+      // 设置默认图像作为兜底
+      console.log("未捕获错误情况下设置默认图像");
+      setAiGeneratedBackground('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
     }
+    
+    // 最终检查，确保aiGeneratedBackground不为null
+    setTimeout(() => {
+      if (!aiGeneratedBackground) {
+        console.log("最终安全检查 - aiGeneratedBackground仍为null，设置兜底默认图像");
+        setAiGeneratedBackground('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+        setAiBackgroundStatus('使用默认图像');
+      }
+    }, 1000);
   };
   
   // 处理图像加载，获取原始尺寸
@@ -422,23 +1291,33 @@ export default function ProductPage() {
       width,
       height
     });
-    // 初始化大小为原始尺寸的100%
-    const newWidth = width;
-    const newHeight = height;
-    setLogoSize({ width: newWidth, height: newHeight });
-    setLogoScale(100);
+    
+    // 设置固定的默认大小和位置
+    // 计算以原始尺寸25%的大小
+    const targetWidth = width * 0.25;
+    const targetHeight = height * 0.25;
+    
+    setLogoSize({ width: targetWidth, height: targetHeight });
+    setLogoScale(25); // 设置为25%的缩放比例
     setAspectRatio(width / height);
-    console.log('图像加载完成，原始尺寸:', { width, height, 宽高比: width / height });
+    
+    // 固定的左上角位置
+    setLogoPosition({ x: 20, y: 20 });
+    console.log('图像加载完成，设置默认尺寸为原始的25%:', { width: targetWidth, height: targetHeight });
   };
   
   // 拖动处理函数
   const handleDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
+    e.preventDefault(); // 防止其他默认行为
     setIsDragging(true);
+    console.log('开始拖动头像');
   };
   
   const handleDragMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isDragging) return;
+    e.stopPropagation();
+    e.preventDefault(); // 防止其他默认行为
     
     // 获取容器元素
     const container = e.currentTarget;
@@ -453,15 +1332,20 @@ export default function ProductPage() {
     const boundedY = Math.min(Math.max(y, 0), 100);
     
     setLogoPosition({ x: boundedX, y: boundedY });
+    console.log('拖动头像中:', { x: boundedX, y: boundedY });
   };
   
   const handleDragEnd = () => {
-    setIsDragging(false);
+    if (isDragging) {
+      console.log('结束拖动头像');
+      setIsDragging(false);
+    }
   };
   
   // 添加调整大小处理函数
   const handleResizeStart = (e: React.MouseEvent<HTMLDivElement>, direction: string) => {
     e.stopPropagation(); // 阻止事件冒泡，防止触发拖拽
+    e.preventDefault(); // 防止默认行为
     setIsResizing(true);
     setResizeDirection(direction);
     console.log('开始调整大小:', direction);
@@ -607,8 +1491,8 @@ export default function ProductPage() {
     // 检查是否有必要的图像
     const foregroundImage = shouldRemoveBackground ? removeBgResult : removeBgImage;
     
-    if (!foregroundImage || !aiGeneratedBackground) {
-      alert('需要同时有前景图片和AI生成背景才能合成');
+    if (!aiGeneratedBackground) {
+      alert('需要至少有AI生成背景才能合成');
       return;
     }
     
@@ -651,7 +1535,7 @@ export default function ProductPage() {
               transform: translate(-50%, -50%);
               width: ${logoSize.width}px;
               height: auto;
-              z-index: 2;
+              z-index: 30;
             }
             .text-overlay {
               position: absolute;
@@ -663,9 +1547,9 @@ export default function ProductPage() {
               font-weight: ${fontWeight};
               font-family: ${fontFamily}, sans-serif;
               text-align: center;
-              z-index: 3;
+              z-index: 40;
               ${showTextBg ? `background-color: ${textBgColor};` : ''}
-              padding: ${showTextBg ? textPadding + 'px' : '0'};
+              padding: ${showTextBg ? `${textPadding}px` : '0'};
               border-radius: 4px;
               max-width: 80%;
               word-wrap: break-word;
@@ -677,8 +1561,8 @@ export default function ProductPage() {
         <body>
           <div class="container">
             <img class="background" src="${getFullImageUrl(aiGeneratedBackground)}" alt="背景" />
-            <img class="foreground" src="${getFullImageUrl(foregroundImage)}" alt="前景" />
-            ${textContent ? `<div class="text-overlay">${textContent}</div>` : ''}
+            ${foregroundImage ? `<img class="foreground" src="${getFullImageUrl(foregroundImage)}" alt="前景" />` : ''}
+            ${textContent ? `<div class="text-overlay">${textContent.replace(/You/g, '<span style="font-size: 125%; font-weight: bold;">You</span>')}</div>` : ''}
           </div>
         </body>
         </html>
@@ -690,23 +1574,124 @@ export default function ProductPage() {
       
       setCompositeResult(compositeUrl);
       setAiBackgroundStatus('已创建合成预览');
+      
+      // 添加自动滚动到结果区域的功能
+      setTimeout(() => {
+        // 使用选择器查找合成结果区域并滚动到那里
+        const resultSection = document.querySelector('[data-result-section]');
+        if (resultSection) {
+          // 确保滚动动画平滑
+          resultSection.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'start' 
+          });
+          console.log('滚动到合成结果区域');
+        } else {
+          console.log('找不到合成结果区域，无法滚动');
+        }
+      }, 300); // 增加延迟时间，确保DOM更新完成
     } catch (error) {
       console.error('合成图像错误:', error);
       setAiBackgroundStatus('合成图像时出错');
     }
   };
   
-  // 辅助函数：获取完整URL
+  // 添加监视aiGeneratedBackground状态变化的useEffect
+  useEffect(() => {
+    if (aiGeneratedBackground) {
+      console.log('背景图像URL已更新:', aiGeneratedBackground);
+      
+      // 预加载图像，确保可以正确显示
+      const img = new Image();
+      img.onload = () => {
+        console.log('背景图像加载成功，尺寸:', img.width, 'x', img.height);
+      };
+      img.onerror = (e) => {
+        console.error('背景图像加载失败:', e);
+      };
+      img.src = getFullImageUrl(aiGeneratedBackground);
+    }
+  }, [aiGeneratedBackground]);
+  
+  // 辅助函数：获取完整URL - 增强版本
   const getFullImageUrl = (relativeUrl: string | null): string => {
-    if (!relativeUrl) return '';
-    if (relativeUrl.startsWith('http')) return relativeUrl;
-    if (relativeUrl.startsWith('blob:')) return relativeUrl;
-    if (relativeUrl.startsWith('data:')) return relativeUrl;
+    if (!relativeUrl) {
+      console.error('传入了空的图片URL, 调用栈:', new Error().stack);
+      // 返回一个透明像素的数据URI，而不是空字符串
+      return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    }
     
-    // 输出日志以便调试
-    console.log('处理相对URL:', relativeUrl);
-    const fullUrl = `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000'}${relativeUrl}`;
+    console.log('处理图片URL开始:', relativeUrl.substring(0, 50) + (relativeUrl.length > 50 ? '...' : ''));
+    
+    // 检查是否是Base64编码图像
+    if (relativeUrl.startsWith('data:image/')) {
+      console.log('URL是Base64编码图像, 直接返回');
+      return relativeUrl;
+    }
+    
+    // 已经是完整的HTTP URL - 确保CORS不会阻止加载
+    if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
+      // 如果是本地开发环境且URL指向API服务器，可能需要使用代理或CORS配置
+      if (process.env.NODE_ENV === 'development' && 
+         (relativeUrl.includes('localhost:5000') || relativeUrl.includes('127.0.0.1:5000'))) {
+        // 如果API服务器配置了CORS，直接返回即可
+        console.log('URL是开发环境中的API服务器URL, 直接返回:', relativeUrl);
+        return relativeUrl;
+      }
+      
+      // 如果是外部图像URL，可能需要通过后端代理
+      if (!relativeUrl.includes(window.location.hostname)) {
+        console.log('URL是外部图像, 考虑是否需要代理:', relativeUrl);
+        // 如果有代理配置，可以修改为:
+        // return `/api/proxy-image?url=${encodeURIComponent(relativeUrl)}`;
+      }
+      
+      console.log('URL已经是完整的HTTP URL, 返回:', relativeUrl);
+      return relativeUrl;
+    }
+    
+    if (relativeUrl.startsWith('blob:')) {
+      console.log('Blob URL, 返回:', relativeUrl);
+      return relativeUrl;
+    }
+    
+    // 确保URL以/开头
+    let normalizedUrl = relativeUrl;
+    if (!normalizedUrl.startsWith('/')) {
+      normalizedUrl = '/' + normalizedUrl;
+    }
+    
+    // 删除结果URL中可能存在的双斜杠
+    while (normalizedUrl.includes('//')) {
+      normalizedUrl = normalizedUrl.replace('//', '/');
+    }
+    
+    // 构建完整URL - 尝试多种可能的环境变量和硬编码值
+    let baseUrl = 'http://localhost:5000'; // 默认值
+    
+    // 尝试读取可能的环境变量
+    if (process.env.NEXT_PUBLIC_API_URL) {
+      baseUrl = process.env.NEXT_PUBLIC_API_URL;
+      console.log('使用NEXT_PUBLIC_API_URL环境变量:', baseUrl);
+    } else if (process.env.NEXT_PUBLIC_API_BASE_URL) {
+      baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+      console.log('使用NEXT_PUBLIC_API_BASE_URL环境变量:', baseUrl);
+    } else if (process.env.NEXT_PUBLIC_BACKEND_URL) {
+      baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+      console.log('使用NEXT_PUBLIC_BACKEND_URL环境变量:', baseUrl);
+    } else {
+      console.log('使用默认API基础URL:', baseUrl);
+    }
+    
+    // 在开发环境中直接使用硬编码值
+    if (process.env.NODE_ENV === 'development') {
+      baseUrl = 'http://localhost:5000';
+      console.log('开发环境使用硬编码URL:', baseUrl);
+    }
+    
+    const fullUrl = `${baseUrl}${normalizedUrl}`;
     console.log('生成完整URL:', fullUrl);
+    
     return fullUrl;
   };
   
@@ -718,6 +1703,61 @@ export default function ProductPage() {
       g: parseInt(result[2], 16),
       b: parseInt(result[3], 16)
     } : null;
+  };
+
+  // 修改条件渲染逻辑
+  // 判断函数：是否应该显示"初始预览"
+  const shouldShowInitialPreview = () => {
+    // 只要有背景就不显示初始预览
+    if (aiGeneratedBackground) return false;
+    
+    // 只有在完全没有背景时才显示初始预览
+    return true;
+  };
+  
+  // 判断函数：是否应该显示"背景预览"
+  const shouldShowBackgroundPreview = () => {
+    // 始终返回false，隐藏背景预览部分
+    return false;
+  };
+  
+  // 判断函数：是否应该显示"实时预览与调整"
+  const shouldShowFullPreview = () => {
+    // 只要有背景就显示完整预览，不受其他状态影响
+    if (!aiGeneratedBackground) return false;
+    
+    // 始终显示实时预览和调整
+    return true;
+  };
+
+  // 添加一个辅助函数，处理文本内容特殊格式
+  const formatSpecialText = (text: string): React.ReactNode => {
+    // 检查是否包含"You"
+    if (!text.includes('You')) {
+      return text;
+    }
+    
+    // 分割文本，增强"You"的显示
+    const parts = text.split(/(You)/g);
+    return parts.map((part, index) => 
+      part === 'You' ? (
+        <span key={index} style={{ fontSize: '125%', fontWeight: 'bold' }}>
+          {part}
+        </span>
+      ) : part
+    );
+  };
+  
+  // 添加删除头像的函数
+  const deleteAvatar = () => {
+    setRemoveBgImage(null);
+    setRemoveBgResult(null);
+    setSelectedFileName('');
+  };
+  
+  // 添加删除文字的函数
+  const deleteText = () => {
+    setTextContent('');
   };
 
   return (
@@ -732,454 +1772,519 @@ export default function ProductPage() {
       <div className="absolute top-[20%] right-[15%] w-32 h-32 rounded-full bg-[#4868e1] opacity-5 blur-3xl"></div>
       <div className="absolute bottom-[10%] left-[20%] w-64 h-64 rounded-full bg-[#4868e1] opacity-5 blur-3xl"></div>
       
-      {/* 极简风格头部 */}
-      <section className="w-full flex flex-col justify-center items-center px-6 py-20">
-        <h1 className="text-4xl md:text-6xl font-semibold tracking-tight text-center">
-          AI背景合成
-        </h1>
-        <p className="mt-4 text-[#8e91c0] max-w-xl text-center">
-          简洁而不简单的图像合成工具
-        </p>
-      </section>
-      
-      <div className="max-w-screen-xl mx-auto px-4 pb-24 space-y-12">
-        <div className="flex flex-col md:flex-row gap-8">
-          {/* 左侧控制区域 */}
-          <div className="w-full md:w-1/5 space-y-4">
-            {/* 第一部分：AI背景生成 */}
-            <div className="smart-card p-4 space-y-3 glow-effect">
-              <h2 className="text-lg font-medium">第1步：AI背景生成</h2>
-              
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <label className="text-xs text-[#8e91c0]">输入背景描述：</label>
-                  <textarea
-                    value={aiBackgroundPrompt}
-                    onChange={(e) => setAiBackgroundPrompt(e.target.value)}
-                    className="smart-input w-full h-20 text-sm py-2 px-3"
-                    placeholder="输入详细的背景描述，越具体效果越好"
-                    rows={2}
-                  ></textarea>
-                </div>
-                
-                <button
-                  className="smart-button w-[80%] mx-auto block py-1 px-1.5 text-[15px]"
-                  onClick={generateAiBackground}
-                  disabled={!aiBackgroundPrompt || isGeneratingAiBackground}
-                >
-                  {isGeneratingAiBackground ? '生成中...' : '生成背景'}
-                </button>
-                
-                {isGeneratingAiBackground && (
-                  <p className="text-xs animate-pulse text-[#4868e1]">{aiBackgroundStatus || '生成中...'}</p>
-                )}
-              </div>
-            </div>
+      {/* 内容容器 - 包裹所有内容，确保居中一致性 */}
+      <div className="max-w-screen-xl mx-auto px-4 pb-24">
+        {/* 极简风格头部 */}
+        <section className="w-full flex flex-col justify-center items-center pt-16 pb-10 text-center">
+          <div className="w-full pl-[10%]">
+            <h1 className="text-2xl md:text-3xl lg:text-4xl font-semibold tracking-tight w-full text-left">
+              <span style={{ fontSize: '150%', fontWeight: 'bold' }}>You</span>Tube Banner 制作器
+            </h1>
+            <p className="mt-4 text-[#8e91c0] text-sm md:text-base text-left">
+              简洁高效的频道横幅设计工具
+            </p>
             
-            {/* 第二部分：上传LOGO或头像 */}
-            <div className="smart-card p-4 space-y-3">
-              <h2 className="text-lg font-medium">第2步：上传LOGO或头像</h2>
-              
-              <div className="space-y-3">
-                <input
-                  type="file"
-                  ref={removeBgInputRef}
-                  onChange={handleRemoveBgUpload}
-                  className="hidden"
-                  accept="image/*"
-                />
+            {/* 添加分隔线增强视觉效果 */}
+            <div className="mt-6 w-24 h-1 bg-gradient-to-r from-[#4868e1] to-[#5a77e6] rounded-full"></div>
+          </div>
+        </section>
+        
+        <div className="space-y-10">
+          <div className="flex flex-col md:flex-row gap-8">
+            {/* 左侧控制区域 */}
+            <div className="w-full md:w-1/5 space-y-4">
+              {/* 第一部分：AI背景生成 */}
+              <div className="smart-card p-4 space-y-3 glow-effect">
+                <h2 className="text-lg font-medium">第1步：AI背景生成</h2>
                 
-                <div className="space-y-2">
-                  <button 
-                    className="smart-button w-[80%] mx-auto block py-1 px-1.5 text-[15px]"
-                    onClick={() => removeBgInputRef.current?.click()}
-                  >
-                    选择图片
-                  </button>
-                </div>
-                
-                {/* 背景移除切换选项 */}
-                {removeBgImage && (
-                  <div className="mt-2">
-                    <label className="flex items-center space-x-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={shouldRemoveBackground}
-                        onChange={(e) => setShouldRemoveBackground(e.target.checked)}
-                        className="form-checkbox h-3 w-3 rounded-full bg-[#1a1b36] border-[#3d3f66] text-[#4868e1]"
-                      />
-                      <span className="text-xs">移除背景</span>
-                      
-                      <span className="text-xs font-medium text-[#4868e1]">文件名：</span>
-                      
-                      {/* 显示文件名 */}
-                      {selectedFileName && (
-                        <span className="text-[10px] text-[#8e91c0] truncate max-w-[70px]">
-                          {selectedFileName}
-                        </span>
-                      )}
-                    </label>
-                    
-                    {shouldRemoveBackground && (
-                      <div className="mt-2">
-                        <div className="flex items-center space-x-2 mb-2">
-                          <span className="text-xs text-[#8e91c0]">输出格式:</span>
-                          <select
-                            value={outputFormat}
-                            onChange={(e) => setOutputFormat(e.target.value)}
-                            className="smart-input text-xs py-1 px-2"
-                          >
-                            <option value="png">PNG</option>
-                            <option value="webp">WebP</option>
-                          </select>
-                        </div>
-                        
-                        <button 
-                          className="smart-button w-[80%] mx-auto block py-1 px-1.5 text-[15px]"
-                          onClick={startRemoveBackground}
-                          disabled={!removeBgImage || isRemovingBg}
-                        >
-                          {isRemovingBg ? '处理中...' : '生成头像或logo'}
-                        </button>
-                        
-                        {isRemovingBg && (
-                          <p className="text-xs animate-pulse text-[#4868e1] mt-1">{removeBgStatus || '处理中...'}</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            {/* 第三部分：添加文字 */}
-            <div className="smart-card p-4 space-y-3">
-              <h2 className="text-lg font-medium">第3步：添加文字</h2>
-              
-              <div className="space-y-2">
-                <div className="space-y-1">
-                  <label className="text-xs text-[#8e91c0]">输入文字内容：</label>
-                  <textarea
-                    value={textContent}
-                    onChange={(e) => setTextContent(e.target.value)}
-                    className="smart-input w-full text-sm py-2 px-3"
-                    placeholder="在此输入显示的文字内容"
-                    rows={1}
-                  ></textarea>
-                </div>
-                
-                {/* 文字样式选项 */}
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs text-[#8e91c0]">文字颜色:</label>
-                    <input 
-                      type="color" 
-                      value={textColor}
-                      onChange={(e) => setTextColor(e.target.value)}
-                      className="w-5 h-5 rounded-full overflow-hidden border-0 cursor-pointer bg-transparent"
-                    />
+                  <div className="space-y-1">
+                    <label className="text-xs text-[#8e91c0]">输入背景描述：</label>
+                    <textarea
+                      value={aiBackgroundPrompt}
+                      onChange={(e) => setAiBackgroundPrompt(e.target.value)}
+                      className="smart-input w-full h-20 text-sm py-2 px-3"
+                      placeholder="输入详细的背景描述，越具体效果越好"
+                      rows={2}
+                    ></textarea>
+                    
+                    {/* 添加翻译提示 */}
+                    <p className="text-[10px] text-[#8e91c0] italic mt-1">
+                      提示：中文描述会被自动翻译成英文以获得更好的生成效果
+                    </p>
                   </div>
                   
-                  {/* 添加字体选择 */}
+                  {/* 添加否定提示词输入 */}
                   <div className="space-y-1">
-                    <label className="text-xs text-[#8e91c0]">字体选择:</label>
+                    <label className="text-xs text-[#8e91c0] flex items-center">
+                      <span>否定提示词：</span>
+                      <span className="text-[10px] ml-1 italic">(不希望出现的元素)</span>
+                    </label>
+                    <textarea
+                      value={negativePrompt}
+                      onChange={(e) => setNegativePrompt(e.target.value)}
+                      className="smart-input w-full h-12 text-sm py-2 px-3"
+                      placeholder="例如: 人物, 文字, 标志, 模糊, 失真"
+                      rows={1}
+                    ></textarea>
+                    <p className="text-[10px] text-[#8e91c0] italic mt-1">
+                      提示：指定您不希望在图像中出现的元素，多个元素用逗号分隔
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <label className="text-xs text-[#8e91c0]">选择风格预设：</label>
                     <select
-                      value={fontFamily}
-                      onChange={(e) => setFontFamily(e.target.value)}
-                      className="smart-input text-xs w-full py-1 px-2"
+                      value={stylePreset}
+                      onChange={(e) => setStylePreset(e.target.value)}
+                      className="smart-input w-full text-sm py-2 px-3"
                     >
-                      <option value="Arial">Arial</option>
-                      <option value="Verdana">Verdana</option>
-                      <option value="Georgia">Georgia</option>
-                      <option value="Times New Roman">Times New Roman</option>
-                      <option value="Courier New">Courier New</option>
-                      <option value="Impact">Impact</option>
-                      <option value="Comic Sans MS">Comic Sans MS</option>
-                      <option value="宋体">宋体</option>
-                      <option value="黑体">黑体</option>
-                      <option value="微软雅黑">微软雅黑</option>
+                      {stylePresets.map((preset) => (
+                        <option key={preset.value} value={preset.value}>
+                          {preset.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   
+                  {/* 添加种子参数选项 */}
                   <div className="space-y-1">
-                    <label className="text-xs text-[#8e91c0]">文字大小: {textSize}px</label>
-                    <input
-                      type="range"
-                      min="12"
-                      max="72"
-                      step="1"
-                      value={textSize}
-                      onChange={(e) => setTextSize(parseInt(e.target.value))}
-                      className="smart-range w-full"
-                    />
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs text-[#8e91c0] flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={showSeedOption}
+                          onChange={() => setShowSeedOption(!showSeedOption)}
+                          className="mr-1 h-3 w-3"
+                        />
+                        自定义种子值
+                      </label>
+                      <span className="text-xs text-[#6282ff]">
+                        {showSeedOption ? (seedValue === 0 ? "随机种子" : `种子值: ${seedValue}`) : ""}
+                      </span>
+                    </div>
+                    
+                    {showSeedOption && (
+                      <div className="mt-2 space-y-2">
+                        <input
+                          type="number"
+                          min="0"
+                          max="4294967294"
+                          value={seedValue}
+                          onChange={(e) => setSeedValue(Math.max(0, Math.min(4294967294, Number(e.target.value))))}
+                          className="smart-input w-full text-sm py-1 px-2"
+                          placeholder="0表示随机种子"
+                        />
+                        <div className="flex justify-between">
+                          <button 
+                            className="text-xs text-[#4868e1] bg-[#26284e] px-2 py-1 rounded hover:bg-[#323565]"
+                            onClick={() => setSeedValue(0)}
+                          >
+                            随机
+                          </button>
+                          <button 
+                            className="text-xs text-[#4868e1] bg-[#26284e] px-2 py-1 rounded hover:bg-[#323565]"
+                            onClick={() => setSeedValue(Math.floor(Math.random() * 4294967294))}
+                          >
+                            生成新种子
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-[#8e91c0] italic">
+                          种子值决定生成的"随机性"，相同种子值会生成相似结果
+                        </p>
+                      </div>
+                    )}
                   </div>
                   
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs text-[#8e91c0]">文字粗细:</label>
-                    <button
-                      onClick={toggleFontWeight}
-                      className={`px-1 py-0.5 rounded-sm text-[15px] transition ${
-                        fontWeight === 'bold' 
-                          ? 'bg-[#4868e1] text-white' 
-                          : 'bg-[#26284e] text-white'
-                      }`}
-                    >
-                      加粗
-                    </button>
+                  <button
+                    className={`smart-button w-[80%] mx-auto block py-1 px-1.5 text-[15px] ${isGeneratingAiBackground ? '' : 'hover-pulse'} transition-colors duration-500`}
+                    style={{
+                      animation: isGeneratingAiBackground 
+                        ? 'pulseAnimation 3s infinite ease-in-out' 
+                        : 'none'
+                    }}
+                    onClick={generateAiBackground}
+                    disabled={!aiBackgroundPrompt || isGeneratingAiBackground}
+                  >
+                    {isGeneratingAiBackground ? '生成中...' : '生成背景'}
+                  </button>
+                </div>
+              </div>
+              
+              {/* 第二部分：上传LOGO或头像 */}
+              <div className="smart-card p-4 space-y-3">
+                <h2 className="text-lg font-medium">第2步：上传LOGO或头像</h2>
+                
+                <div className="space-y-3">
+                  <input
+                    type="file"
+                    ref={removeBgInputRef}
+                    onChange={handleRemoveBgUpload}
+                    className="hidden"
+                    accept="image/*"
+                  />
+                  
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <button 
+                        className="smart-button w-3/4 py-1 px-1.5 text-[15px]"
+                        onClick={() => removeBgInputRef.current?.click()}
+                      >
+                        选择图片
+                      </button>
+                      
+                      {/* 添加删除按钮 */}
+                      {(removeBgImage || removeBgResult) && (
+                        <button 
+                          className="bg-[#ff4757] hover:bg-[#ff6b81] text-white py-1 px-2 rounded text-sm transition-colors duration-200"
+                          onClick={deleteAvatar}
+                          title="删除图片"
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
                   </div>
                   
-                  <div className="flex items-center space-x-2">
-                    <label className="flex items-center space-x-1 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={showTextBg}
-                        onChange={(e) => setShowTextBg(e.target.checked)}
-                        className="form-checkbox h-3 w-3 rounded-full bg-[#1a1b36] border-[#3d3f66] text-[#4868e1]"
+                  {/* 背景移除切换选项 */}
+                  {removeBgImage && (
+                    <div className="mt-2">
+                      <label className="flex items-center space-x-2 text-sm">
+                        <input 
+                          type="checkbox" 
+                          checked={shouldRemoveBackground} 
+                          onChange={(e) => setShouldRemoveBackground(e.target.checked)}
+                          className="form-checkbox h-4 w-4 rounded-full bg-[#1a1b36] border-[#3d3f66] text-[#4868e1]"
+                        />
+                        <span>自动移除背景</span>
+                      </label>
+                      
+                      {/* 手动触发背景移除按钮 */}
+                      {!isRemovingBg && shouldRemoveBackground && !removeBgResult && (
+                        <button 
+                          className="smart-button w-3/4 py-1 px-1.5 text-[15px] mt-2"
+                          onClick={startRemoveBackground}
+                          disabled={!removeBgImage}
+                        >
+                          开始处理图片
+                        </button>
+                      )}
+                      
+                      {/* 文件名显示 */}
+                      {selectedFileName && (
+                        <p className="text-xs text-[#8e91c0] mt-2 truncate">
+                          已选择: {selectedFileName}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              {/* 第三部分：添加文字 */}
+              <div className="smart-card p-4 space-y-3">
+                <h2 className="text-lg font-medium">第3步：添加文字</h2>
+                
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs text-[#8e91c0]">输入文字内容：</label>
+                      
+                      {/* 添加删除按钮 */}
+                      {textContent && (
+                        <button 
+                          className="bg-[#ff4757] hover:bg-[#ff6b81] text-white py-0.5 px-2 rounded text-xs transition-colors duration-200"
+                          onClick={deleteText}
+                          title="删除文字"
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      value={textContent}
+                      onChange={(e) => setTextContent(e.target.value)}
+                      className="smart-input w-full text-sm py-2 px-3"
+                      placeholder="在此输入显示的文字内容"
+                      rows={1}
+                    ></textarea>
+                    
+                    {/* 添加"已选择"提示框 */}
+                    {textContent && (
+                      <div className="mt-1 px-2 py-1 bg-[#26284e] rounded-md border border-[#4868e1] text-xs text-[#4868e1] flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span>已添加文字</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* 文字样式选项 */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#8e91c0]">文字颜色:</label>
+                      <input 
+                        type="color" 
+                        value={textColor}
+                        onChange={(e) => setTextColor(e.target.value)}
+                        className="w-5 h-5 rounded-full overflow-hidden border-0 cursor-pointer bg-transparent"
                       />
-                      <span className="text-xs">显示文字背景</span>
-                    </label>
+                    </div>
+                    
+                    {/* 添加字体选择 */}
+                    <div className="space-y-1">
+                      <label className="text-xs text-[#8e91c0]">字体选择:</label>
+                      <select
+                        value={fontFamily}
+                        onChange={(e) => setFontFamily(e.target.value)}
+                        className="smart-input text-xs w-full py-1 px-2"
+                      >
+                        <option value="Arial">Arial</option>
+                        <option value="Verdana">Verdana</option>
+                        <option value="Georgia">Georgia</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Courier New">Courier New</option>
+                        <option value="Impact">Impact</option>
+                        <option value="Comic Sans MS">Comic Sans MS</option>
+                        <option value="宋体">宋体</option>
+                        <option value="黑体">黑体</option>
+                        <option value="微软雅黑">微软雅黑</option>
+                      </select>
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <label className="text-xs text-[#8e91c0]">文字大小: {textSize}px</label>
+                      <input
+                        type="range"
+                        min="12"
+                        max="72"
+                        step="1"
+                        value={textSize}
+                        onChange={(e) => setTextSize(parseInt(e.target.value))}
+                        className="smart-range w-full"
+                      />
+                    </div>
+                    
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-[#8e91c0]">文字粗细:</label>
+                      <button
+                        onClick={toggleFontWeight}
+                        className={`px-1 py-0.5 rounded-sm text-[15px] transition ${
+                          fontWeight === 'bold' 
+                            ? 'bg-[#4868e1] text-white' 
+                            : 'bg-[#26284e] text-white'
+                        }`}
+                      >
+                        加粗
+                      </button>
+                    </div>
+                    
+                    <div className="flex items-center space-x-2">
+                      <label className="flex items-center space-x-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={showTextBg}
+                          onChange={(e) => setShowTextBg(e.target.checked)}
+                          className="form-checkbox h-3 w-3 rounded-full bg-[#1a1b36] border-[#3d3f66] text-[#4868e1]"
+                        />
+                        <span className="text-xs">显示文字背景</span>
+                      </label>
+                      
+                      {showTextBg && (
+                        <div className="flex items-center ml-1">
+                          <input 
+                            type="color" 
+                            value={textBgColor.startsWith('rgba') ? '#000000' : textBgColor}
+                            onChange={(e) => {
+                              // 保持透明度
+                              const rgb = hexToRgb(e.target.value);
+                              if (rgb) {
+                                setTextBgColor(`rgba(${rgb.r},${rgb.g},${rgb.b},0.5)`);
+                              }
+                            }}
+                            className="w-5 h-5 rounded-full overflow-hidden border-0 cursor-pointer bg-transparent"
+                          />
+                        </div>
+                      )}
+                    </div>
                     
                     {showTextBg && (
-                      <div className="flex items-center ml-1">
-                        <input 
-                          type="color" 
-                          value={textBgColor.startsWith('rgba') ? '#000000' : textBgColor}
-                          onChange={(e) => {
-                            // 保持透明度
-                            const rgb = hexToRgb(e.target.value);
-                            if (rgb) {
-                              setTextBgColor(`rgba(${rgb.r},${rgb.g},${rgb.b},0.5)`);
-                            }
-                          }}
-                          className="w-5 h-5 rounded-full overflow-hidden border-0 cursor-pointer bg-transparent"
+                      <div className="space-y-1">
+                        <label className="text-xs text-[#8e91c0]">内边距: {textPadding}px</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="24"
+                          step="1"
+                          value={textPadding}
+                          onChange={(e) => setTextPadding(parseInt(e.target.value))}
+                          className="smart-range w-full"
+                          disabled={!showTextBg}
                         />
                       </div>
                     )}
                   </div>
                   
-                  {showTextBg && (
-                    <div className="space-y-1">
-                      <label className="text-xs text-[#8e91c0]">内边距: {textPadding}px</label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="24"
-                        step="1"
-                        value={textPadding}
-                        onChange={(e) => setTextPadding(parseInt(e.target.value))}
-                        className="smart-range w-full"
-                        disabled={!showTextBg}
-                      />
-                    </div>
-                  )}
+                  <p className="text-[10px] text-[#8e91c0] italic text-right mt-1">
+                    在预览区域可以拖动文字调整位置
+                  </p>
                 </div>
-                
-                <p className="text-[10px] text-[#8e91c0] italic text-right mt-1">
-                  在预览区域可以拖动文字调整位置
-                </p>
               </div>
             </div>
-          </div>
-          
-          {/* 右侧预览和结果区域 */}
-          <div className="w-full md:w-4/5 space-y-6">
-            {/* 初始预览提示 - 当没有渲染好的结果时显示 */}
-            {(!aiGeneratedBackground || !(shouldRemoveBackground ? removeBgResult : removeBgImage) || isGeneratingAiBackground || isRemovingBg) && !compositeResult && (
-              <div className="smart-card h-[500px] flex items-center justify-center">
-                <div className="text-center p-8 max-w-md">
-                  <div className="w-20 h-20 bg-[#26284e] rounded-full flex items-center justify-center mx-auto mb-6 relative">
-                    <div className="absolute inset-0 rounded-full bg-[#4868e1] opacity-20 blur-md"></div>
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-[#4868e1]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-2xl font-medium mb-2">预览区域</h3>
-                  
-                  {/* 显示处理状态 */}
-                  {(isGeneratingAiBackground || isRemovingBg) ? (
-                    <div className="mb-6">
-                      <p className="text-[#4868e1] animate-pulse mb-2">
-                        {isGeneratingAiBackground ? aiBackgroundStatus || '正在生成背景...' : removeBgStatus || '正在处理图片...'}
-                      </p>
-                      <div className="w-full h-1.5 bg-[#26284e] rounded-full overflow-hidden">
-                        <div className="h-full bg-[#4868e1] animate-pulse rounded-full" style={{width: '100%', animationDuration: '1.5s'}}></div>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-[#8e91c0] mb-8">完成左侧的步骤后，您的作品将在此处显示</p>
-                  )}
-                  
-                  <div className="flex flex-col gap-5">
-                    <div className="flex items-center text-sm">
-                      <span className={`w-7 h-7 ${isGeneratingAiBackground ? 'bg-[#5a77e6] animate-pulse' : 'bg-[#4868e1]'} text-white rounded-full flex items-center justify-center mr-4 text-xs`}>1</span>
-                      <span>生成AI背景</span>
-                    </div>
-                    <div className="flex items-center text-sm">
-                      <span className={`w-7 h-7 ${isRemovingBg ? 'bg-[#5a77e6] animate-pulse' : 'bg-[#4868e1]'} text-white rounded-full flex items-center justify-center mr-4 text-xs`}>2</span>
-                      <span>上传LOGO或头像</span>
-                    </div>
-                    <div className="flex items-center text-sm">
-                      <span className="w-7 h-7 bg-[#4868e1] text-white rounded-full flex items-center justify-center mr-4 text-xs">3</span>
-                      <span>添加文字（可选）</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 实时预览和调整控制 - 只有在两个图像都加载完成且没有处理中状态时才显示 */}
-            {aiGeneratedBackground && (shouldRemoveBackground ? removeBgResult : removeBgImage) && !isGeneratingAiBackground && !isRemovingBg && (
-              <div className="smart-card overflow-hidden">
-                <div className="p-6 space-y-6">
-                  <h2 className="text-xl font-medium">实时预览和调整</h2>
-                  
-                  <div className="relative bg-checkered w-full h-[500px] overflow-hidden rounded-xl">
-                    {/* 背景图 */}
-                    <img 
-                      src={getFullImageUrl(aiGeneratedBackground)} 
-                      alt="背景" 
-                      className="absolute top-0 left-0 w-full h-full object-cover"
-                    />
+            
+            {/* 右侧预览和结果区域 */}
+            <div className="w-full md:w-4/5 space-y-6">
+              {/* 预览容器 - 使用固定高度包装所有预览类型 */}
+              <div className="smart-card overflow-hidden" style={{ minHeight: '700px' }}>
+                {/* 背景预览区域 - 在背景图加载过程中添加头像显示 */}
+                {shouldShowBackgroundPreview() && (
+                  <div className="p-6 space-y-6 h-full">
+                    <h2 className="text-xl font-medium">背景预览</h2>
                     
-                    {/* 可拖动的LOGO/头像 */}
-                    <div 
-                      className="relative w-full h-full"
-                      onMouseDown={handleDragStart}
-                      onMouseMove={(e) => {
-                        if (isDragging) {
-                          handleDragMove(e);
-                        } else if (isResizing) {
-                          handleResizeMove(e);
-                        } else if (isEditingText) {
-                          handleTextDragMove(e);
-                        }
-                      }}
-                      onMouseUp={() => {
-                        handleDragEnd();
-                        handleResizeEnd();
-                        handleTextDragEnd();
-                      }}
-                      onMouseLeave={() => {
-                        handleDragEnd();
-                        handleResizeEnd();
-                        handleTextDragEnd();
-                      }}
-                    >
-                      {/* LOGO/头像 */}
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: `${logoPosition.y}%`,
-                          left: `${logoPosition.x}%`,
-                          transform: 'translate(-50%, -50%)',
-                          width: `${logoSize.width}px`,
-                          height: 'auto',
-                          zIndex: 10
-                        }}
-                      >
+                    <div className="relative bg-checkered w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' }}> {/* 16:9比例 */}
+                      {/* 背景图 */}
+                      {aiGeneratedBackground && (
                         <img 
-                          src={getFullImageUrl(shouldRemoveBackground ? removeBgResult : removeBgImage)}
-                          alt="可拖动的LOGO/头像"
-                          style={{
-                            width: '100%',
-                            height: 'auto',
-                            cursor: isDragging ? 'grabbing' : 'grab',
-                            transition: isDragging || isResizing ? 'none' : 'width 0.1s ease-out, height 0.1s ease-out'
+                          key={`background-${new Date().getTime()}`} // 添加key以强制重新加载
+                          src={getFullImageUrl(aiGeneratedBackground)} 
+                          alt="背景" 
+                          className={`absolute top-0 left-0 w-full h-full object-cover ${isRemovingBg ? 'opacity-80' : 'opacity-100'} transition-opacity duration-300`}
+                          style={{ zIndex: 1 }}
+                          onLoad={(e) => {
+                            console.log('背景图像加载成功:', (e.target as HTMLImageElement).src);
+                            // 显示成功消息
+                            setAiBackgroundStatus('背景图加载成功');
+                            setBackgroundImageLoaded(true); // 设置图片加载完成
                           }}
-                          onLoad={(e) => console.log('预览区域头像图片加载')}
-                          onError={(e) => console.error('预览区域头像图片加载失败', e)}
+                          onError={(e) => {
+                            console.error('背景图像加载失败:', (e.target as HTMLImageElement).src);
+                            setBackgroundImageLoaded(false); // 设置图片加载失败
+                            
+                            // 尝试设置备用图像
+                            if (aiGeneratedBackground) {
+                              const img = e.target as HTMLImageElement;
+                              img.onerror = null; // 防止无限循环
+                              
+                              // 检查是否是Base64数据，如果不是再尝试使用原始URL
+                              if (!aiGeneratedBackground.startsWith('data:')) {
+                                // 清除可能的相对路径处理
+                                if (aiGeneratedBackground.startsWith('http')) {
+                                  console.log('尝试直接使用绝对URL:', aiGeneratedBackground);
+                                  img.src = aiGeneratedBackground;
+                                } else {
+                                  // 尝试直接使用原始URL
+                                  console.log('尝试直接使用原始URL:', aiGeneratedBackground);
+                                  img.src = aiGeneratedBackground;
+                                }
+                                
+                                // 如果还失败，尝试添加随机查询参数避免缓存
+                                img.onerror = () => {
+                                  const urlWithCache = aiGeneratedBackground.includes('?') 
+                                    ? `${aiGeneratedBackground}&t=${new Date().getTime()}` 
+                                    : `${aiGeneratedBackground}?t=${new Date().getTime()}`;
+                                  
+                                  console.log('尝试添加随机查询参数:', urlWithCache);
+                                  img.onerror = null;
+                                  img.src = urlWithCache;
+                                  
+                                  // 如果还失败，显示错误信息
+                                  img.onerror = () => {
+                                    console.error('所有尝试都失败，无法加载图像');
+                                    img.onerror = null;
+                                    setAiBackgroundStatus('图像加载失败，请尝试重新生成');
+                                  };
+                                }
+                              } else {
+                                // 已经是Base64数据，可能格式有问题
+                                console.error('Base64图像格式可能有问题');
+                                setAiBackgroundStatus('Base64图像加载失败，请尝试重新生成');
+                              }
+                            }
+                          }}
                         />
-                        
-                        {/* 调整框 */}
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            height: '100%',
-                            border: '1px solid rgba(72, 104, 225, 0.7)',
-                            pointerEvents: 'none',
-                            boxSizing: 'border-box',
-                            boxShadow: '0 0 0 1px rgba(72, 104, 225, 0.2)'
-                          }}
-                        ></div>
-                        
-                        {/* 四个角的调整点 */}
-                        {/* 左上角 */}
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: '-6px',
-                            left: '-6px',
-                            width: '12px',
-                            height: '12px',
-                            backgroundColor: '#26284e',
-                            border: '1px solid #4868e1',
-                            borderRadius: '50%',
-                            cursor: 'nwse-resize',
-                            zIndex: 11,
-                            boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
-                          }}
-                          onMouseDown={(e) => handleResizeStart(e, 'tl')}
-                        ></div>
-                        
-                        {/* 右上角 */}
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: '-6px',
-                            right: '-6px',
-                            width: '12px',
-                            height: '12px',
-                            backgroundColor: '#26284e',
-                            border: '1px solid #4868e1',
-                            borderRadius: '50%',
-                            cursor: 'nesw-resize',
-                            zIndex: 11,
-                            boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
-                          }}
-                          onMouseDown={(e) => handleResizeStart(e, 'tr')}
-                        ></div>
-                        
-                        {/* 左下角 */}
-                        <div
-                          style={{
-                            position: 'absolute',
-                            bottom: '-6px',
-                            left: '-6px',
-                            width: '12px',
-                            height: '12px',
-                            backgroundColor: '#26284e',
-                            border: '1px solid #4868e1',
-                            borderRadius: '50%',
-                            cursor: 'nesw-resize',
-                            zIndex: 11,
-                            boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
-                          }}
-                          onMouseDown={(e) => handleResizeStart(e, 'bl')}
-                        ></div>
-                        
-                        {/* 右下角 */}
-                        <div
-                          style={{
-                            position: 'absolute',
-                            bottom: '-6px',
-                            right: '-6px',
-                            width: '12px',
-                            height: '12px',
-                            backgroundColor: '#26284e',
-                            border: '1px solid #4868e1',
-                            borderRadius: '50%',
-                            cursor: 'nwse-resize',
-                            zIndex: 11,
-                            boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
-                          }}
-                          onMouseDown={(e) => handleResizeStart(e, 'br')}
-                        ></div>
-                      </div>
+                      )}
                       
-                      {/* 可拖动的文字 */}
+                      {/* 添加头像显示 - 即使在背景加载过程中也能显示头像 */}
+                      {(shouldRemoveBackground ? removeBgResult : removeBgImage) && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: `${logoPosition.y}%`,
+                            left: `${logoPosition.x}%`,
+                            transform: 'translate(-50%, -50%)',
+                            width: `${logoSize.width}px`,
+                            height: 'auto',
+                            zIndex: 30,
+                            cursor: isDragging ? 'grabbing' : 'grab',
+                            userSelect: 'none' // 防止选中图像内容
+                          }}
+                        >
+                          <img 
+                            src={getFullImageUrl(shouldRemoveBackground ? removeBgResult : removeBgImage)}
+                            alt="LOGO/头像"
+                            style={{
+                              width: '100%',
+                              height: 'auto',
+                              pointerEvents: 'none', // 防止图片本身干扰拖拽事件
+                              transition: 'width 0.1s ease-out, height 0.1s ease-out',
+                              userSelect: 'none' // 防止选中
+                            }}
+                          />
+                        </div>
+                      )}
+                      
+                      {/* 背景生成中的进度指示器 - 不会覆盖现有内容 */}
+                      {isGeneratingAiBackground && (
+                        <div className="absolute top-4 left-4 z-20 bg-[#1a1b36] bg-opacity-80 p-3 rounded-lg shadow-lg backdrop-blur-sm">
+                          <div className="flex items-center space-x-3">
+                            <div className="relative w-8 h-8">
+                              <div className="absolute inset-0 rounded-full bg-[#4868e1] opacity-20 blur-sm"></div>
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-[#4868e1] animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </div>
+                            <div>
+                              <p className="text-xs text-[#4868e1] font-medium">{'背景加载中...'}</p>
+                              <div className="w-48 h-1 mt-1 bg-[#26284e] rounded-full overflow-hidden">
+                                <div className="h-full bg-[#4868e1] rounded-full" 
+                                  style={{
+                                    width: '100%', 
+                                    animation: 'breatheAnimation 3s infinite ease-in-out'
+                                  }}
+                                ></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* 处理中状态 */}
+                      {isRemovingBg && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+                          <div className="text-center p-8 max-w-md">
+                            <div className="w-16 h-16 bg-[#26284e] rounded-full flex items-center justify-center mx-auto mb-4 relative">
+                              <div className="absolute inset-0 rounded-full bg-[#4868e1] opacity-20 blur-md"></div>
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-[#4868e1] animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </div>
+                            
+                            {/* 添加进度条 */}
+                            <div className="w-full h-1.5 bg-[#26284e] rounded-full overflow-hidden">
+                              <div className="h-full bg-[#4868e1] rounded-full" 
+                                style={{
+                                  width: '100%', 
+                                  animation: 'breatheAnimation 3s infinite ease-in-out'
+                                }}
+                              ></div>
+                            </div>
+                            <p className="text-xs text-[#4868e1] mt-2">处理中...</p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* 可拖动的文字 - 只需要背景已生成 */}
                       {textContent && (
                         <div
                           style={{
@@ -1192,143 +2297,401 @@ export default function ProductPage() {
                             fontWeight: fontWeight,
                             fontFamily: `${fontFamily}, sans-serif`,
                             textAlign: 'center',
-                            zIndex: 20,
+                            zIndex: 40,
                             backgroundColor: showTextBg ? textBgColor : 'transparent',
                             padding: showTextBg ? `${textPadding}px` : '0',
                             borderRadius: '8px',
                             maxWidth: '80%',
-                            cursor: isEditingText ? 'grabbing' : 'grab',
-                            border: isEditingText ? '1px dashed rgba(72, 104, 225, 0.8)' : 'none',
+                            cursor: 'grab',
                             wordBreak: 'break-word',
                             whiteSpace: 'pre-wrap',
-                            lineHeight: 1.4,
-                            textShadow: isEditingText ? '0 0 5px rgba(72, 104, 225, 0.5)' : 'none'
+                            lineHeight: 1.4
                           }}
-                          onMouseDown={handleTextDragStart}
-                          onMouseUp={handleTextDragEnd}
                         >
-                          {textContent}
+                          {formatSpecialText(textContent)}
                         </div>
                       )}
                       
-                      {/* 添加提示信息 */}
+                      {/* 添加指导说明 - 修改条件：只有在图片已加载成功且没有正在移除背景、没有文本内容和头像，且aiBackgroundStatus不为'背景生成完成'或'背景图加载成功'时显示 */}
+                      {backgroundImageLoaded && !isRemovingBg && !textContent && 
+                       !(removeBgImage || removeBgResult) &&
+                       !(aiBackgroundStatus === '背景生成完成' || aiBackgroundStatus === '背景图加载成功') && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="flex flex-col items-center space-y-8 w-full">
+                            {/* 中间步骤指导 */}
+                            <div className="flex flex-col gap-5 mb-4">
+                              <div className="flex items-center">
+                                <span className="w-8 h-8 bg-[#4868e1] text-white rounded-full flex items-center justify-center mr-3 text-sm shadow-lg glow-effect">1</span>
+                                <span className="text-white">生成AI背景</span>
+                              </div>
+                              <div className="flex items-center">
+                                <span className="w-8 h-8 bg-[#4868e1] text-white rounded-full flex items-center justify-center mr-3 text-sm shadow-lg glow-effect">2</span>
+                                <span className="text-white">上传LOGO或头像</span>
+                              </div>
+                              <div className="flex items-center">
+                                <span className="w-8 h-8 bg-[#4868e1] text-white rounded-full flex items-center justify-center mr-3 text-sm shadow-lg glow-effect">3</span>
+                                <span className="text-white">添加文字 (可选)</span>
+                              </div>
+                            </div>
+                            
+                            {/* 蓝色操作指南框 */}
+                            <div className="bg-[#4868e1] bg-opacity-40 p-4 rounded-lg backdrop-blur-sm max-w-md">
+                              <h3 className="text-white text-base mb-2 font-medium text-center">如何使用</h3>
+                              <ol className="text-white text-sm space-y-1 pl-5">
+                                <li>输入背景描述并选择风格</li>
+                                <li>点击"生成背景"按钮</li>
+                                <li>上传您的LOGO或头像完成合成</li>
+                              </ol>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 实时预览和调整控制 - 只有在两个图像都加载完成且没有处理中状态时才显示 */}
+                {shouldShowFullPreview() && (
+                  <div className="p-6 space-y-6 h-full">
+                    <h2 className="text-xl font-medium">实时预览和调整</h2>
+                    
+                    <div className="relative bg-checkered w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' }}> {/* 16:9比例 */}
+                      {/* 背景图 */}
+                      {aiGeneratedBackground && (
+                        <img 
+                          src={getFullImageUrl(aiGeneratedBackground)} 
+                          alt="背景" 
+                          className="absolute top-0 left-0 w-full h-full object-cover"
+                          style={{ zIndex: 1 }}
+                        />
+                      )}
+                      
+                      {/* 背景生成中的进度指示器 */}
+                      {isGeneratingAiBackground && (
+                        <div className="absolute top-4 left-4 z-20 bg-[#1a1b36] bg-opacity-80 p-3 rounded-lg shadow-lg backdrop-blur-sm">
+                          <div className="flex items-center space-x-3">
+                            <div className="relative w-8 h-8">
+                              <div className="absolute inset-0 rounded-full bg-[#4868e1] opacity-20 blur-sm"></div>
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-[#4868e1] animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </div>
+                            <div>
+                              <p className="text-xs text-[#4868e1] font-medium">{'背景加载中...'}</p>
+                              <div className="w-48 h-1 mt-1 bg-[#26284e] rounded-full overflow-hidden">
+                                <div className="h-full bg-[#4868e1] rounded-full" 
+                                  style={{
+                                    width: '100%', 
+                                    animation: 'breatheAnimation 3s infinite ease-in-out'
+                                  }}
+                                ></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* 可拖动的LOGO/头像容器 */}
                       <div 
-                        className="absolute top-2 right-2 bg-[#1a1b36] bg-opacity-90 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-md pointer-events-none"
-                        style={{ opacity: isDragging ? 1 : 0, transition: 'opacity 0.2s', boxShadow: '0 0 10px rgba(0, 0, 0, 0.3)' }}
+                        className="absolute top-0 left-0 w-full h-full"
+                        onMouseDown={handleDragStart}
+                        onMouseMove={(e) => {
+                          if (isDragging) {
+                            handleDragMove(e);
+                          } else if (isResizing) {
+                            handleResizeMove(e);
+                          } else if (isEditingText) {
+                            handleTextDragMove(e);
+                          }
+                        }}
+                        onMouseUp={() => {
+                          handleDragEnd();
+                          handleResizeEnd();
+                          handleTextDragEnd();
+                        }}
+                        onMouseLeave={() => {
+                          handleDragEnd();
+                          handleResizeEnd();
+                          handleTextDragEnd();
+                        }}
                       >
-                        拖动中: ({Math.round(logoPosition.x)}%, {Math.round(logoPosition.y)}%)
+                        {/* LOGO/头像 */}
+                        {(shouldRemoveBackground ? removeBgResult : removeBgImage) && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: `${logoPosition.y}%`,
+                              left: `${logoPosition.x}%`,
+                              transform: 'translate(-50%, -50%)',
+                              width: `${logoSize.width}px`,
+                              height: 'auto',
+                              zIndex: 30,
+                              cursor: isDragging ? 'grabbing' : 'grab',
+                              userSelect: 'none' // 防止选中图像内容
+                            }}
+                            onMouseDown={handleDragStart}
+                          >
+                            <img 
+                              src={getFullImageUrl(shouldRemoveBackground ? removeBgResult : removeBgImage)}
+                              alt="可拖动的LOGO/头像"
+                              style={{
+                                width: '100%',
+                                height: 'auto',
+                                pointerEvents: 'none', // 防止图片本身干扰拖拽事件
+                                transition: isDragging || isResizing ? 'none' : 'width 0.1s ease-out, height 0.1s ease-out',
+                                userSelect: 'none' // 防止选中
+                              }}
+                              onLoad={handleImageLoad}
+                              onError={(e) => console.error('预览区域头像图片加载失败', e)}
+                              draggable="false" // 防止拖拽图片
+                            />
+                            
+                            {/* 调整框 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: '100%',
+                                height: '100%',
+                                border: '1px solid rgba(72, 104, 225, 0.7)',
+                                pointerEvents: 'none',
+                                boxSizing: 'border-box',
+                                boxShadow: '0 0 0 1px rgba(72, 104, 225, 0.2)',
+                                backgroundColor: 'transparent' // 确保背景透明
+                              }}
+                            ></div>
+                            
+                            {/* 四个角的调整点 */}
+                            {/* 左上角 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '-6px',
+                                left: '-6px',
+                                width: '12px',
+                                height: '12px',
+                                backgroundColor: '#26284e',
+                                border: '1px solid #4868e1',
+                                borderRadius: '50%',
+                                cursor: 'nwse-resize',
+                                zIndex: 11,
+                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)',
+                                userSelect: 'none' // 防止文本选择
+                              }}
+                              onMouseDown={(e) => handleResizeStart(e, 'tl')}
+                            ></div>
+                            
+                            {/* 右上角 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '-6px',
+                                right: '-6px',
+                                width: '12px',
+                                height: '12px',
+                                backgroundColor: '#26284e',
+                                border: '1px solid #4868e1',
+                                borderRadius: '50%',
+                                cursor: 'nesw-resize',
+                                zIndex: 11,
+                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                              }}
+                              onMouseDown={(e) => handleResizeStart(e, 'tr')}
+                            ></div>
+                            
+                            {/* 左下角 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                bottom: '-6px',
+                                left: '-6px',
+                                width: '12px',
+                                height: '12px',
+                                backgroundColor: '#26284e',
+                                border: '1px solid #4868e1',
+                                borderRadius: '50%',
+                                cursor: 'nesw-resize',
+                                zIndex: 11,
+                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                              }}
+                              onMouseDown={(e) => handleResizeStart(e, 'bl')}
+                            ></div>
+                            
+                            {/* 右下角 */}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                bottom: '-6px',
+                                right: '-6px',
+                                width: '12px',
+                                height: '12px',
+                                backgroundColor: '#26284e',
+                                border: '1px solid #4868e1',
+                                borderRadius: '50%',
+                                cursor: 'nwse-resize',
+                                zIndex: 11,
+                                boxShadow: '0 0 5px rgba(72, 104, 225, 0.5)'
+                              }}
+                              onMouseDown={(e) => handleResizeStart(e, 'br')}
+                            ></div>
+                          </div>
+                        )}
+                        
+                        {/* 可拖动的文字 */}
+                        {textContent && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: `${textPosition.y}%`,
+                              left: `${textPosition.x}%`,
+                              transform: 'translate(-50%, -50%)',
+                              color: textColor,
+                              fontSize: `${textSize}px`,
+                              fontWeight: fontWeight,
+                              fontFamily: `${fontFamily}, sans-serif`,
+                              textAlign: 'center',
+                              zIndex: 40,
+                              backgroundColor: showTextBg ? textBgColor : 'transparent',
+                              padding: showTextBg ? `${textPadding}px` : '0',
+                              borderRadius: '8px',
+                              maxWidth: '80%',
+                              cursor: isEditingText ? 'grabbing' : 'grab',
+                              userSelect: 'none',
+                              wordBreak: 'break-word',
+                              whiteSpace: 'pre-wrap',
+                              lineHeight: 1.4
+                            }}
+                            onMouseDown={handleTextDragStart}
+                          >
+                            {formatSpecialText(textContent)}
+                          </div>
+                        )}
                       </div>
                     </div>
-                  </div>
-                  
-                  {/* 调整大小控制 */}
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <label className="block font-medium">
-                        缩放比例: <span className="text-[#4868e1]">{logoScale}%</span>
-                      </label>
-                    </div>
                     
-                    {/* 保持宽高比选项 */}
-                    <div>
-                      <label className="flex items-center space-x-2 text-sm cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          checked={maintainAspectRatio} 
-                          onChange={(e) => setMaintainAspectRatio(e.target.checked)}
-                          className="form-checkbox h-4 w-4 rounded-full bg-[#1a1b36] border-[#3d3f66] text-[#4868e1]"
+                    {/* 调整大小控制 */}
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center">
+                        <label className="block font-medium">
+                          缩放比例: <span className="text-[#4868e1]">{logoScale}%</span>
+                        </label>
+                      </div>
+                      
+                      {/* 保持宽高比选项 */}
+                      <div>
+                        <label className="flex items-center space-x-2 text-sm cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            checked={maintainAspectRatio} 
+                            onChange={(e) => setMaintainAspectRatio(e.target.checked)}
+                            className="form-checkbox h-4 w-4 rounded-full bg-[#1a1b36] border-[#3d3f66] text-[#4868e1]"
+                          />
+                          <span>保持宽高比例 ({aspectRatio.toFixed(2)})</span>
+                        </label>
+                      </div>
+                      
+                      <div className="flex items-center space-x-3">
+                        <button 
+                          className="p-1 bg-[#26284e] text-white rounded-sm hover:bg-[#323565] transition"
+                          onClick={() => adjustScale(-10)}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-2 w-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                          </svg>
+                        </button>
+                        
+                        <input
+                          type="range"
+                          min="10"
+                          max="400"
+                          step="5"
+                          value={logoScale}
+                          onChange={handleScaleChange}
+                          className="smart-range w-full"
                         />
-                        <span>保持宽高比例 ({aspectRatio.toFixed(2)})</span>
-                      </label>
+                        
+                        <button 
+                          className="p-1 bg-[#26284e] text-white rounded-sm hover:bg-[#323565] transition"
+                          onClick={() => adjustScale(10)}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-2 w-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                     
-                    <div className="flex items-center space-x-3">
+                    {/* 合成按钮 */}
+                    <div>
                       <button 
-                        className="p-1 bg-[#26284e] text-white rounded-sm hover:bg-[#323565] transition"
-                        onClick={() => adjustScale(-10)}
+                        className="smart-button w-auto mx-auto block py-0.5 px-10 text-[15px] relative overflow-hidden group"
+                        onClick={compositeImage}
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-2 w-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                        </svg>
+                        <span className="relative z-10">合成图像</span>
+                        <div className="absolute inset-0 bg-[#5a77e6] transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left"></div>
                       </button>
-                      
-                      <input
-                        type="range"
-                        min="10"
-                        max="400"
-                        step="5"
-                        value={logoScale}
-                        onChange={handleScaleChange}
-                        className="smart-range w-full"
-                      />
-                      
-                      <button 
-                        className="p-1 bg-[#26284e] text-white rounded-sm hover:bg-[#323565] transition"
-                        onClick={() => adjustScale(10)}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-2 w-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                      </button>
+                      <p className="text-xs text-[#8e91c0] mt-2 text-center">
+                        将按照设置合成最终图像
+                      </p>
                     </div>
                   </div>
-                  
-                  {/* 合成按钮 */}
-                  <div>
-                    <button 
-                      className="smart-button w-auto mx-auto block py-0.5 px-10 text-[15px] relative overflow-hidden group"
-                      onClick={compositeImage}
-                    >
-                      <span className="relative z-10">合成图像</span>
-                      <div className="absolute inset-0 bg-[#5a77e6] transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left"></div>
-                    </button>
-                    <p className="text-xs text-[#8e91c0] mt-2 text-center">
-                      将按照设置合成最终图像
-                    </p>
-                  </div>
-                </div>
+                )}
               </div>
-            )}
-            
-            {/* 合成预览结果 */}
-            {compositeResult && (
-              <div className="smart-card">
-                <div className="p-6 space-y-6">
-                  <h2 className="text-xl font-medium flex items-center">
+                
+              {/* 合成预览结果 - 作为独立区域显示，不会覆盖原预览 */}
+              {compositeResult && (
+                <div className="smart-card p-6 space-y-6 bg-[#191a32] rounded-xl shadow-lg border border-[#26284e]" data-result-section>
+                  <h2 className="text-xl font-medium flex items-center border-b border-[#26284e] pb-4">
                     <span className="bg-[#203045] text-[#4acfff] px-2 py-1 rounded-full text-xs mr-2">完成</span>
                     合成结果
                   </h2>
-                  <div className="rounded-xl overflow-hidden bg-[#1e203a]">
+                  
+                  {/* 新的合成结果显示区域 */}
+                  <div className="mt-4 relative w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' }}> {/* 16:9比例 */}
                     <iframe 
                       src={compositeResult} 
-                      className="w-full h-[500px] border-none"
+                      className="absolute top-0 left-0 w-full h-full border-none"
                       title="合成预览"
                     ></iframe>
                   </div>
-                  <div className="flex space-x-3">
-                    <a
-                      href={compositeResult}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex-1 py-1 px-1.5 text-[15px] bg-[#26284e] text-white text-center rounded-sm hover:bg-[#323565] transition"
-                    >
-                      在新窗口中打开
-                    </a>
-                    <a
-                      href={compositeResult}
-                      download="ai-composed-image.html"
-                      className="smart-button flex-1 py-1 text-[15px]"
-                    >
-                      下载合成结果
-                    </a>
+                  
+                  {/* 合成结果下方的操作区域 */}
+                  <div className="mt-6 p-4 bg-[#1e203a] rounded-lg">
+                    <h3 className="text-md font-medium mb-3 text-[#4acfff]">合成图像已生成</h3>
+                    <p className="text-sm text-[#8e91c0] mb-4">您可以下载或在新窗口中查看完整效果</p>
+                    
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <a
+                        href={compositeResult}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 py-2 px-4 text-[15px] bg-[#26284e] text-white text-center rounded-md hover:bg-[#323565] transition flex items-center justify-center"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                        在新窗口中打开
+                      </a>
+                      <a
+                        href={compositeResult}
+                        download="ai-composed-image.html"
+                        className="smart-button flex-1 py-2 text-[15px] flex items-center justify-center"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        下载合成结果
+                      </a>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>
-      
+        
       <footer className="border-t border-[#26284e] mt-12 py-8 text-center text-sm text-[#8e91c0]">
         <div className="max-w-md mx-auto">
           <p>© 2023 AI背景合成工具</p>

@@ -548,6 +548,7 @@ export default function DebugPage() {
                   src={getFullImageUrl(aiGeneratedBackground)} 
                   alt="背景" 
                   className="absolute top-0 left-0 w-full h-full object-cover"
+                  style={{ zIndex: 1 }}
                 />
                 
                 {/* 可拖动的LOGO/头像 */}
@@ -569,6 +570,7 @@ export default function DebugPage() {
                       transform: 'translate(-50%, -50%)',
                       width: `${logoSize.width}px`,
                       height: 'auto',
+                      zIndex: 30,
                       cursor: isDragging ? 'grabbing' : 'grab'
                     }}
                   />

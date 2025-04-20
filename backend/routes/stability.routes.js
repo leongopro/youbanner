@@ -28,6 +28,14 @@ router.get('/get-api-key', (req, res) => {
 });
 
 /**
+ * 使用Stability AI v2beta/stable-image/generate/core API生成图像
+ * @route POST /api/stability/v2beta/generate/core
+ * @description 使用v2beta API生成全新图像
+ * @access Public
+ */
+router.post('/v2beta/generate/core', stabilityController.generateStableImageCore);
+
+/**
  * 使用v2beta API进行img2img处理
  * @route POST /api/stability/v2beta/img2img
  * @description 使用v2beta API将提供的图像转换为新图像

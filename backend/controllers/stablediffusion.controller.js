@@ -2644,6 +2644,258 @@ async function processReplaceBackground(jobId, image, backgroundPrompt, outputFo
   }
 }
 
+/**
+ * 使用Stability AI v2beta的Core Generate API生成图像
+ * @param {Express.Request} req 
+ * @param {Express.Response} res 
+ */
+async function generateStableImageCore(req, res) {
+  // 从请求体中获取参数
+  const { 
+    prompt, 
+    negativePrompt, 
+    width = 1024, 
+    height = 1024, 
+    steps = 50,
+    cfg_scale = 7,
+    output_format = "webp" 
+  } = req.body;
+
+  // 检查必填参数
+  if (!prompt) {
+    logger.error('缺少必要参数prompt');
+    return res.status(400).json({ error: '缺少必要参数prompt' });
+  }
+
+  // 创建任务ID
+  const jobId = `gen_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+  
+  // 记录请求参数
+  logger.info('开始生成图像任务', { 
+    jobId, 
+    prompt, 
+    width, 
+    height, 
+    steps,
+    promptLength: prompt.length
+  });
+
+  try {
+    // 获取API密钥
+    const apiKey = process.env.STABILITY_API_KEY || process.env.STABLE_DIFFUSION_API_KEY;
+    
+    if (!apiKey) {
+      logger.error('未找到Stability API密钥', { jobId });
+      return res.status(500).json({ error: '服务器配置错误：未设置API密钥' });
+    }
+
+    // 构建请求参数
+    const payload = {
+      prompt,
+      width: parseInt(width),
+      height: parseInt(height),
+      steps: parseInt(steps),
+      cfg_scale: parseFloat(cfg_scale),
+      output_format
+    };
+
+    // 如果有负面提示词，添加到请求参数
+    if (negativePrompt) {
+      payload.negative_prompt = negativePrompt;
+    }
+
+    // 记录任务开始
+    logger.debug('准备调用Stability API', { 
+      jobId, 
+      payload: JSON.stringify(payload) 
+    });
+
+    // 使用axios.postForm发送请求
+    const formData = new FormData();
+    for (const key in payload) {
+      formData.append(key, payload[key]);
+    }
+
+    const response = await axios.postForm(
+      'https://api.stability.ai/v2beta/stable-image/generate/core',
+      formData,
+      {
+        validateStatus: undefined,
+        responseType: 'arraybuffer',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'image/*'
+        },
+        timeout: 120000 // 2分钟超时
+      }
+    );
+
+    // 检查响应状态
+    if (response.status === 200) {
+      logger.info('图像生成成功', { jobId });
+
+      // 确保输出目录存在
+      const outputDir = path.join(__dirname, '../public/generated');
+      await ensureDirectoryExists(outputDir);
+
+      // 生成文件名
+      const fileName = `${jobId}.${output_format}`;
+      const filePath = path.join(outputDir, fileName);
+      
+      // 将响应数据保存为图像文件
+      await fs.promises.writeFile(filePath, Buffer.from(response.data));
+      
+      // 返回图像URL
+      const imageUrl = `/generated/${fileName}`;
+      
+      // 返回成功结果
+      return res.status(200).json({
+        success: true,
+        imageUrl,
+        message: '图像生成成功'
+      });
+    } else {
+      // 处理错误响应
+      let errorMessage = '图像生成失败';
+      
+      try {
+        // 尝试从响应数据中解析错误信息
+        const errorText = Buffer.from(response.data).toString();
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.message || errorData.error || `请求失败(${response.status})`;
+      } catch (parseError) {
+        errorMessage = `请求失败(${response.status}): ${Buffer.from(response.data).toString().substring(0, 100)}`;
+      }
+      
+      logger.error('图像生成API请求失败', { 
+        jobId, 
+        status: response.status, 
+        error: errorMessage 
+      });
+      
+      return res.status(500).json({ 
+        error: errorMessage
+      });
+    }
+  } catch (error) {
+    // 记录详细错误信息
+    logger.error('图像生成过程出错', { 
+      jobId, 
+      error: error.message, 
+      stack: error.stack 
+    });
+    
+    return res.status(500).json({ 
+      error: '服务器处理请求时出错: ' + error.message 
+    });
+  }
+}
+
+/**
+ * 异步处理Stability AI的图像生成请求
+ * @param {string} jobId 任务ID
+ * @param {string} apiKey Stability API密钥
+ * @param {object} requestData 请求数据
+ */
+async function processStabilityGenerateApiAsync(jobId, apiKey, requestData) {
+  try {
+    logger.debug('开始调用Stability API', { jobId });
+    
+    // 发起API请求
+    const response = await axios({
+      method: 'post',
+      url: 'https://api.stability.ai/v2beta/stable-image/generate/core',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      data: requestData,
+      timeout: 120000 // 2分钟超时
+    });
+
+    logger.info('API请求成功，正在处理响应', { jobId });
+    
+    if (response.data && response.data.artifacts && response.data.artifacts.length > 0) {
+      // 处理生成的图像
+      const results = await processGeneratedImages(jobId, response.data.artifacts);
+      
+      // 更新任务状态
+      updateTaskStatus(jobId, 'completed', {
+        result: results,
+        endTime: new Date()
+      });
+      
+      logger.info('图像生成任务完成', { jobId, imageCount: results.length });
+    } else {
+      logger.warn('API返回数据格式不符合预期', { 
+        jobId, 
+        responseDataKeys: Object.keys(response.data || {}) 
+      });
+      
+      updateTaskStatus(jobId, 'failed', {
+        error: '服务器返回的数据格式不符合预期',
+        endTime: new Date()
+      });
+    }
+  } catch (error) {
+    // 记录详细的API错误
+    logDetailedApiError('图像生成', jobId, error, { requestData });
+    
+    // 更新任务状态为失败
+    updateTaskStatus(jobId, 'failed', {
+      error: getApiErrorMessage(error),
+      endTime: new Date()
+    });
+  }
+}
+
+/**
+ * 处理生成的图像
+ * @param {string} jobId 任务ID
+ * @param {Array} artifacts 生成的图像数据
+ * @returns {Array} 保存后的图像URL列表
+ */
+async function processGeneratedImages(jobId, artifacts) {
+  const results = [];
+  
+  try {
+    // 确保输出目录存在
+    const outputDir = path.join(__dirname, '../public/generated');
+    await fs.promises.mkdir(outputDir, { recursive: true });
+    
+    // 处理每个生成的图像
+    for (let i = 0; i < artifacts.length; i++) {
+      const artifact = artifacts[i];
+      
+      // 将base64转换为图像并保存
+      const imageBuffer = Buffer.from(artifact.base64, 'base64');
+      const fileName = `${jobId}_${i}.png`;
+      const filePath = path.join(outputDir, fileName);
+      
+      await fs.promises.writeFile(filePath, imageBuffer);
+      
+      // 添加到结果列表
+      results.push({
+        imageUrl: `/generated/${fileName}`,
+        seed: artifact.seed,
+        width: artifact.width,
+        height: artifact.height,
+        finishReason: artifact.finishReason
+      });
+    }
+    
+    logger.info(`已保存${results.length}个生成的图像`, { jobId });
+    return results;
+  } catch (error) {
+    logger.error('保存生成的图像时出错', { 
+      jobId, 
+      error: error.message 
+    });
+    throw error;
+  }
+}
+
 // 确保所有控制器方法被正确导出
 module.exports = {
   generateImage,
@@ -2656,5 +2908,8 @@ module.exports = {
   generateStableImg2Img,
   processStableImg2ImgGeneration,
   replaceBackgroundAndRelight,
-  processReplaceBackground
+  processReplaceBackground,
+  generateStableImageCore,
+  processStabilityGenerateApiAsync,
+  processGeneratedImages
 }; 
